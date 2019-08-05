@@ -18,6 +18,19 @@ namespace Avalonia.Input
             RoutingStrategies.Bubble,
             typeof(Gestures));
 
+        public static readonly RoutedEvent<RoutedEventArgs> RightTappedEvent = RoutedEvent.Register<RoutedEventArgs>(
+            "RightTapped",
+            RoutingStrategies.Bubble,
+            typeof(Gestures));
+
+        public static readonly RoutedEvent<ScrollGestureEventArgs> ScrollGestureEvent =
+            RoutedEvent.Register<ScrollGestureEventArgs>(
+                "ScrollGesture", RoutingStrategies.Bubble, typeof(Gestures));
+ 
+        public static readonly RoutedEvent<ScrollGestureEventArgs> ScrollGestureEndedEvent =
+            RoutedEvent.Register<ScrollGestureEventArgs>(
+                "ScrollGestureEnded", RoutingStrategies.Bubble, typeof(Gestures));
+
         private static WeakReference s_lastPress;
 
         static Gestures()
@@ -38,7 +51,10 @@ namespace Avalonia.Input
                 }
                 else if (s_lastPress?.IsAlive == true && e.ClickCount == 2 && s_lastPress.Target == e.Source)
                 {
-                    e.Source.RaiseEvent(new RoutedEventArgs(DoubleTappedEvent));
+                    if (e.MouseButton != MouseButton.Right)
+                    {
+                        e.Source.RaiseEvent(new RoutedEventArgs(DoubleTappedEvent));
+                    }
                 }
             }
         }
@@ -51,7 +67,8 @@ namespace Avalonia.Input
 
                 if (s_lastPress?.IsAlive == true && s_lastPress.Target == e.Source)
                 {
-                    ((IInteractive)s_lastPress.Target).RaiseEvent(new RoutedEventArgs(TappedEvent));
+                    var et = e.MouseButton != MouseButton.Right ? TappedEvent : RightTappedEvent;
+                    ((IInteractive)s_lastPress.Target).RaiseEvent(new RoutedEventArgs(et));
                 }
             }
         }

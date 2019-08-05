@@ -2,23 +2,27 @@ using System;
 using System.Collections.Generic;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using Avalonia.Rendering.SceneGraph;
+using Avalonia.Threading;
 using Avalonia.Visuals.Media.Imaging;
 
 namespace Avalonia.Media
 {
     public sealed class DrawingContext : IDisposable
     {
+        private readonly bool _ownsImpl;
         private int _currentLevel;
 
 
-        static readonly Stack<Stack<PushedState>> StateStackPool = new Stack<Stack<PushedState>>();
-        static readonly Stack<Stack<TransformContainer>> TransformStackPool = new Stack<Stack<TransformContainer>>();
+        private static ThreadSafeObjectPool<Stack<PushedState>> StateStackPool { get; } =
+            ThreadSafeObjectPool<Stack<PushedState>>.Default;
 
-        private Stack<PushedState> _states = StateStackPool.Count == 0 ? new Stack<PushedState>() : StateStackPool.Pop();
+        private static ThreadSafeObjectPool<Stack<TransformContainer>> TransformStackPool { get; } =
+            ThreadSafeObjectPool<Stack<TransformContainer>>.Default;
 
-        private Stack<TransformContainer> _transformContainers = TransformStackPool.Count == 0
-            ? new Stack<TransformContainer>()
-            : TransformStackPool.Pop();
+        private Stack<PushedState> _states = StateStackPool.Get();
+
+        private Stack<TransformContainer> _transformContainers = TransformStackPool.Get();
 
         readonly struct TransformContainer
         {
@@ -34,6 +38,13 @@ namespace Avalonia.Media
 
         public DrawingContext(IDrawingContextImpl impl)
         {
+            PlatformImpl = impl;
+            _ownsImpl = true;
+        }
+        
+        public DrawingContext(IDrawingContextImpl impl, bool ownsImpl)
+        {
+            _ownsImpl = ownsImpl;
             PlatformImpl = impl;
         }
 
@@ -83,7 +94,7 @@ namespace Avalonia.Media
         /// <param name="pen">The stroke pen.</param>
         /// <param name="p1">The first point of the line.</param>
         /// <param name="p2">The second point of the line.</param>
-        public void DrawLine(Pen pen, Point p1, Point p2)
+        public void DrawLine(IPen pen, Point p1, Point p2)
         {
             if (PenIsVisible(pen))
             {
@@ -97,8 +108,10 @@ namespace Avalonia.Media
         /// <param name="brush">The fill brush.</param>
         /// <param name="pen">The stroke pen.</param>
         /// <param name="geometry">The geometry.</param>
-        public void DrawGeometry(IBrush brush, Pen pen, Geometry geometry)
+        public void DrawGeometry(IBrush brush, IPen pen, Geometry geometry)
         {
+            Contract.Requires<ArgumentNullException>(geometry != null);
+
             if (brush != null || PenIsVisible(pen))
             {
                 PlatformImpl.DrawGeometry(brush, pen, geometry.PlatformImpl);
@@ -111,13 +124,19 @@ namespace Avalonia.Media
         /// <param name="pen">The pen.</param>
         /// <param name="rect">The rectangle bounds.</param>
         /// <param name="cornerRadius">The corner radius.</param>
-        public void DrawRectangle(Pen pen, Rect rect, float cornerRadius = 0.0f)
+        public void DrawRectangle(IPen pen, Rect rect, float cornerRadius = 0.0f)
         {
             if (PenIsVisible(pen))
             {
                 PlatformImpl.DrawRectangle(pen, rect, cornerRadius);
             }
         }
+
+        /// <summary>
+        /// Draws a custom drawing operation
+        /// </summary>
+        /// <param name="custom">custom operation</param>
+        public void Custom(ICustomDrawOperation custom) => PlatformImpl.Custom(custom);
 
         /// <summary>
         /// Draws text.
@@ -299,14 +318,17 @@ namespace Avalonia.Media
         {
             while (_states.Count != 0)
                 _states.Peek().Dispose();
-            StateStackPool.Push(_states);
+            StateStackPool.Return(_states);
             _states = null;
-            TransformStackPool.Push(_transformContainers);
+            if (_transformContainers.Count != 0)
+                throw new InvalidOperationException("Transform container stack is non-empty");
+            TransformStackPool.Return(_transformContainers);
             _transformContainers = null;
-            PlatformImpl.Dispose();
+            if (_ownsImpl)
+                PlatformImpl.Dispose();
         }
 
-        private static bool PenIsVisible(Pen pen)
+        private static bool PenIsVisible(IPen pen)
         {
             return pen?.Brush != null && pen.Thickness > 0;
         }

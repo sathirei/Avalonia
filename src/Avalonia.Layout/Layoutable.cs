@@ -314,7 +314,7 @@ namespace Avalonia.Layout
                 try
                 {
                     _measuring = true;
-                    desiredSize = MeasureCore(availableSize).Constrain(availableSize);
+                    desiredSize = MeasureCore(availableSize);
                 }
                 finally
                 {
@@ -533,6 +533,9 @@ namespace Avalonia.Layout
 
                 height = Math.Min(height, MaxHeight);
                 height = Math.Max(height, MinHeight);
+
+                width = Math.Min(width, availableSize.Width);
+                height = Math.Min(height, availableSize.Height);
 
                 if (UseLayoutRounding)
                 {

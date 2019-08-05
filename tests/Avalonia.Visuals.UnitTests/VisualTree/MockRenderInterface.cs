@@ -8,6 +8,8 @@ namespace Avalonia.Visuals.UnitTests.VisualTree
 {
     class MockRenderInterface : IPlatformRenderInterface
     {
+        public IEnumerable<string> InstalledFontNames => new string[0];
+
         public IFormattedTextImpl CreateFormattedText(
             string text,
             Typeface typeface,
@@ -54,6 +56,21 @@ namespace Avalonia.Visuals.UnitTests.VisualTree
             throw new NotImplementedException();
         }
 
+        public IGeometryImpl CreateEllipseGeometry(Rect rect)
+        {
+            throw new NotImplementedException();
+        }
+
+        public IGeometryImpl CreateLineGeometry(Point p1, Point p2)
+        {
+            throw new NotImplementedException();
+        }
+
+        public IGeometryImpl CreateRectangleGeometry(Rect rect)
+        {
+            throw new NotImplementedException();
+        }
+
         class MockStreamGeometry : IStreamGeometryImpl
         {
             private MockStreamGeometryContext _impl = new MockStreamGeometryContext();
@@ -79,7 +96,7 @@ namespace Avalonia.Visuals.UnitTests.VisualTree
                 return _impl.FillContains(point);
             }
 
-            public Rect GetRenderBounds(Pen pen)
+            public Rect GetRenderBounds(IPen pen)
             {
                 throw new NotImplementedException();
             }
@@ -94,7 +111,7 @@ namespace Avalonia.Visuals.UnitTests.VisualTree
                 return _impl;
             }
 
-            public bool StrokeContains(Pen pen, Point point)
+            public bool StrokeContains(IPen pen, Point point)
             {
                 throw new NotImplementedException();
             }

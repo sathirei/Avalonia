@@ -5,9 +5,11 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 using Avalonia.Media;
 using Avalonia.Platform;
 using Avalonia.Rendering;
+using Avalonia.Rendering.SceneGraph;
 using Avalonia.Rendering.Utilities;
 using Avalonia.Utilities;
 using Avalonia.Visuals.Media.Imaging;
@@ -18,9 +20,9 @@ namespace Avalonia.Skia
     /// <summary>
     /// Skia based drawing context.
     /// </summary>
-    public class DrawingContextImpl : IDrawingContextImpl
+    internal class DrawingContextImpl : IDrawingContextImpl, ISkiaDrawingContextImpl
     {
-        private readonly IDisposable[] _disposables;
+        private IDisposable[] _disposables;
         private readonly Vector _dpi;
         private readonly Stack<PaintWrapper> _maskStack = new Stack<PaintWrapper>();
         private readonly Stack<double> _opacityStack = new Stack<double>();
@@ -30,7 +32,7 @@ namespace Avalonia.Skia
         private readonly bool _canTextUseLcdRendering;
         private Matrix _currentTransform;
         private GRContext _grContext;
-
+        private bool _disposed;
         /// <summary>
         /// Context create info.
         /// </summary>
@@ -74,6 +76,8 @@ namespace Avalonia.Skia
             _disposables = disposables;
             _canTextUseLcdRendering = !createInfo.DisableTextLcdRendering;
             _grContext = createInfo.GrContext;
+            if (_grContext != null)
+                Monitor.Enter(_grContext);
             
             Canvas = createInfo.Canvas;
 
@@ -95,6 +99,9 @@ namespace Avalonia.Skia
         /// Skia canvas.
         /// </summary>
         public SKCanvas Canvas { get; }
+
+        SKCanvas ISkiaDrawingContextImpl.SkCanvas => Canvas;
+        GRContext ISkiaDrawingContextImpl.GrContext => _grContext;
 
         /// <inheritdoc />
         public void Clear(Color color)
@@ -147,7 +154,7 @@ namespace Avalonia.Skia
         }
 
         /// <inheritdoc />
-        public void DrawLine(Pen pen, Point p1, Point p2)
+        public void DrawLine(IPen pen, Point p1, Point p2)
         {
             using (var paint = CreatePaint(pen, new Size(Math.Abs(p2.X - p1.X), Math.Abs(p2.Y - p1.Y))))
             {
@@ -156,7 +163,7 @@ namespace Avalonia.Skia
         }
 
         /// <inheritdoc />
-        public void DrawGeometry(IBrush brush, Pen pen, IGeometryImpl geometry)
+        public void DrawGeometry(IBrush brush, IPen pen, IGeometryImpl geometry)
         {
             var impl = (GeometryImpl) geometry;
             var size = geometry.Bounds.Size;
@@ -177,7 +184,7 @@ namespace Avalonia.Skia
         }
 
         /// <inheritdoc />
-        public void DrawRectangle(Pen pen, Rect rect, float cornerRadius = 0)
+        public void DrawRectangle(IPen pen, Rect rect, float cornerRadius = 0)
         {
             using (var paint = CreatePaint(pen, rect.Size))
             {
@@ -215,7 +222,7 @@ namespace Avalonia.Skia
         /// <inheritdoc />
         public void DrawText(IBrush foreground, Point origin, IFormattedTextImpl text)
         {
-            using (var paint = CreatePaint(foreground, text.Size))
+            using (var paint = CreatePaint(foreground, text.Bounds.Size))
             {
                 var textImpl = (FormattedTextImpl) text;
                 textImpl.Draw(this, Canvas, origin.ToSKPoint(), paint, _canTextUseLcdRendering);
@@ -257,14 +264,26 @@ namespace Avalonia.Skia
         /// <inheritdoc />
         public virtual void Dispose()
         {
-            if (_disposables == null)
-            {
+            if(_disposed)
                 return;
-            }
-
-            foreach (var disposable in _disposables)
+            try
             {
-                disposable?.Dispose();
+                if (_grContext != null)
+                {
+                    Monitor.Exit(_grContext);
+                    _grContext = null;
+                }
+
+                if (_disposables != null)
+                {
+                    foreach (var disposable in _disposables)
+                        disposable?.Dispose();
+                    _disposables = null;
+                }
+            }
+            finally
+            {
+                _disposed = true;
             }
         }
 
@@ -280,6 +299,8 @@ namespace Avalonia.Skia
         {
             Canvas.Restore();
         }
+
+        public void Custom(ICustomDrawOperation custom) => custom.Render(this);
 
         /// <inheritdoc />
         public void PushOpacityMask(IBrush mask, Rect bounds)
@@ -386,15 +407,15 @@ namespace Avalonia.Skia
         /// <param name="tileBrushImage">Tile brush image.</param>
         private void ConfigureTileBrush(ref PaintWrapper paintWrapper, Size targetSize, ITileBrush tileBrush, IDrawableBitmapImpl tileBrushImage)
         {
-            var calc = new TileBrushCalculator(tileBrush, tileBrushImage.PixelSize.ToSize(_dpi), targetSize);
+            var calc = new TileBrushCalculator(tileBrush, tileBrushImage.PixelSize.ToSizeWithDpi(_dpi), targetSize);
             var intermediate = CreateRenderTarget(calc.IntermediateSize);
 
             paintWrapper.AddDisposable(intermediate);
 
             using (var context = intermediate.CreateDrawingContext(null))
             {
-                var sourceRect = new Rect(tileBrushImage.PixelSize.ToSize(96));
-                var targetRect = new Rect(tileBrushImage.PixelSize.ToSize(_dpi));
+                var sourceRect = new Rect(tileBrushImage.PixelSize.ToSizeWithDpi(96));
+                var targetRect = new Rect(tileBrushImage.PixelSize.ToSizeWithDpi(_dpi));
 
                 context.Clear(Colors.Transparent);
                 context.PushClip(calc.IntermediateClip);
@@ -486,7 +507,6 @@ namespace Avalonia.Skia
         {
             var paint = new SKPaint
             {
-                IsStroke = false,
                 IsAntialias = true
             };
 
@@ -541,8 +561,15 @@ namespace Avalonia.Skia
         /// <param name="pen">Source pen.</param>
         /// <param name="targetSize">Target size.</param>
         /// <returns></returns>
-        private PaintWrapper CreatePaint(Pen pen, Size targetSize)
+        private PaintWrapper CreatePaint(IPen pen, Size targetSize)
         {
+            // In Skia 0 thickness means - use hairline rendering
+            // and for us it means - there is nothing rendered.
+            if (pen.Thickness == 0d)
+            {
+                return default;
+            }
+
             var rv = CreatePaint(pen.Brush, targetSize);
             var paint = rv.Paint;
 
@@ -552,25 +579,17 @@ namespace Avalonia.Skia
             // Need to modify dashes due to Skia modifying their lengths
             // https://docs.microsoft.com/en-us/xamarin/xamarin-forms/user-interface/graphics/skiasharp/paths/dots
             // TODO: Still something is off, dashes are now present, but don't look the same as D2D ones.
-            float dashLengthModifier;
-            float gapLengthModifier;
 
-            switch (pen.StartLineCap)
+            switch (pen.LineCap)
             {
                 case PenLineCap.Round:
                     paint.StrokeCap = SKStrokeCap.Round;
-                    dashLengthModifier = -paint.StrokeWidth;
-                    gapLengthModifier = paint.StrokeWidth;
                     break;
                 case PenLineCap.Square:
                     paint.StrokeCap = SKStrokeCap.Square;
-                    dashLengthModifier = -paint.StrokeWidth;
-                    gapLengthModifier = paint.StrokeWidth;
                     break;
                 default:
                     paint.StrokeCap = SKStrokeCap.Butt;
-                    dashLengthModifier = 0.0f;
-                    gapLengthModifier = 0.0f;
                     break;
             }
 
@@ -596,13 +615,12 @@ namespace Avalonia.Skia
 
                 for (var i = 0; i < srcDashes.Count; ++i)
                 {
-                    var lengthModifier = i % 2 == 0 ? dashLengthModifier : gapLengthModifier;
-
-                    // Avalonia dash lengths are relative, but Skia takes absolute sizes - need to scale
-                    dashesArray[i] = (float) srcDashes[i] * paint.StrokeWidth + lengthModifier;
+                    dashesArray[i] = (float) srcDashes[i] * paint.StrokeWidth;
                 }
 
-                var pe = SKPathEffect.CreateDash(dashesArray, (float) pen.DashStyle.Offset);
+                var offset = (float)(pen.DashStyle.Offset * pen.Thickness);
+
+                var pe = SKPathEffect.CreateDash(dashesArray, offset);
 
                 paint.PathEffect = pe;
                 rv.AddDisposable(pe);
@@ -619,7 +637,7 @@ namespace Avalonia.Skia
         /// <returns></returns>
         private SurfaceRenderTarget CreateRenderTarget(Size size, PixelFormat? format = null)
         {
-            var pixelSize = PixelSize.FromSize(size, _dpi);
+            var pixelSize = PixelSize.FromSizeWithDpi(size, _dpi);
             var createInfo = new SurfaceRenderTarget.CreateInfo
             {
                 Width = pixelSize.Width,

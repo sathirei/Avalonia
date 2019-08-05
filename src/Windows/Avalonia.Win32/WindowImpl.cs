@@ -30,7 +30,10 @@ namespace Avalonia.Win32
         private UnmanagedMethods.WndProc _wndProcDelegate;
         private string _className;
         private IntPtr _hwnd;
+        private bool _multitouch;
+        private TouchDevice _touchDevice = new TouchDevice();
         private IInputRoot _owner;
+        private ManagedDeferredRendererLock _rendererLock = new ManagedDeferredRendererLock();
         private bool _trackingMouse;
         private bool _decorated = true;
         private bool _resizable = true;
@@ -87,7 +90,7 @@ namespace Avalonia.Win32
 
         public Action<double> ScalingChanged { get; set; }
 
-        public Action<Point> PositionChanged { get; set; }
+        public Action<PixelPoint> PositionChanged { get; set; }
 
         public Action<WindowState> WindowStateChanged { get; set; }
 
@@ -148,22 +151,31 @@ namespace Avalonia.Win32
             if (customRendererFactory != null)
                 return customRendererFactory.Create(root, loop);
 
-            return Win32Platform.UseDeferredRendering ? (IRenderer)new DeferredRenderer(root, loop) : new ImmediateRenderer(root);
+            return Win32Platform.UseDeferredRendering ?
+                (IRenderer)new DeferredRenderer(root, loop, rendererLock: _rendererLock) :
+                new ImmediateRenderer(root);
         }
 
         public void Resize(Size value)
         {
-            if (value != ClientSize)
+            int requestedClientWidth = (int)(value.Width * Scaling);
+            int requestedClientHeight = (int)(value.Height * Scaling);
+            UnmanagedMethods.RECT clientRect;
+            UnmanagedMethods.GetClientRect(_hwnd, out clientRect);
+           
+            // do comparison after scaling to avoid rounding issues
+            if (requestedClientWidth != clientRect.Width || requestedClientHeight != clientRect.Height)
             {
-                value *= Scaling;
-                
+                UnmanagedMethods.RECT windowRect;
+                UnmanagedMethods.GetWindowRect(_hwnd, out windowRect);
+
                 UnmanagedMethods.SetWindowPos(
                     _hwnd,
                     IntPtr.Zero,
                     0,
                     0,
-                    (int)value.Width,
-                    (int)value.Height,
+                    requestedClientWidth + (windowRect.Width - clientRect.Width),
+                    requestedClientHeight + (windowRect.Height - clientRect.Height),
                     UnmanagedMethods.SetWindowPosFlags.SWP_RESIZE);
             }
         }
@@ -281,28 +293,28 @@ namespace Avalonia.Win32
             var f = Scaling;
             var r = new UnmanagedMethods.RECT
             {
-                left = (int)(rect.X * f),
-                top = (int)(rect.Y * f),
-                right = (int)(rect.Right * f),
-                bottom = (int)(rect.Bottom * f),
+                left = (int)Math.Floor(rect.X * f),
+                top = (int)Math.Floor(rect.Y * f),
+                right = (int)Math.Ceiling(rect.Right * f),
+                bottom = (int)Math.Ceiling(rect.Bottom * f),
             };
 
             UnmanagedMethods.InvalidateRect(_hwnd, ref r, false);
         }
 
-        public Point PointToClient(Point point)
+        public Point PointToClient(PixelPoint point)
         {
             var p = new UnmanagedMethods.POINT { X = (int)point.X, Y = (int)point.Y };
             UnmanagedMethods.ScreenToClient(_hwnd, ref p);
             return new Point(p.X, p.Y) / Scaling;
         }
 
-        public Point PointToScreen(Point point)
+        public PixelPoint PointToScreen(Point point)
         {
             point *= Scaling;
             var p = new UnmanagedMethods.POINT { X = (int)point.X, Y = (int)point.Y };
             UnmanagedMethods.ClientToScreen(_hwnd, ref p);
-            return new Point(p.X, p.Y);
+            return new PixelPoint(p.X, p.Y);
         }
 
         public void SetInputRoot(IInputRoot inputRoot)
@@ -324,6 +336,7 @@ namespace Avalonia.Win32
 
         public void BeginMoveDrag()
         {
+            WindowsMouseDevice.Instance.Capture(null);
             UnmanagedMethods.DefWindowProc(_hwnd, (int)UnmanagedMethods.WindowsMessage.WM_NCLBUTTONDOWN,
                 new IntPtr((int)UnmanagedMethods.HitTestValues.HTCAPTION), IntPtr.Zero);
         }
@@ -345,26 +358,27 @@ namespace Avalonia.Win32
 #if USE_MANAGED_DRAG
             _managedDrag.BeginResizeDrag(edge, ScreenToClient(MouseDevice.Position));
 #else
+            WindowsMouseDevice.Instance.Capture(null);
             UnmanagedMethods.DefWindowProc(_hwnd, (int)UnmanagedMethods.WindowsMessage.WM_NCLBUTTONDOWN,
                 new IntPtr((int)EdgeDic[edge]), IntPtr.Zero);
 #endif
         }
 
-        public Point Position
+        public PixelPoint Position
         {
             get
             {
                 UnmanagedMethods.RECT rc;
                 UnmanagedMethods.GetWindowRect(_hwnd, out rc);
-                return new Point(rc.left, rc.top);
+                return new PixelPoint(rc.left, rc.top);
             }
             set
             {
                 UnmanagedMethods.SetWindowPos(
                     Handle.Handle,
                     IntPtr.Zero,
-                    (int)value.X,
-                    (int)value.Y,
+                    value.X,
+                    value.Y,
                     0,
                     0,
                     UnmanagedMethods.SetWindowPosFlags.SWP_NOSIZE | UnmanagedMethods.SetWindowPosFlags.SWP_NOACTIVATE);
@@ -407,6 +421,15 @@ namespace Avalonia.Win32
                 IntPtr.Zero);
         }
 
+        bool ShouldIgnoreTouchEmulatedMessage()
+        {
+            if (!_multitouch)
+                return false;
+            var marker = 0xFF515700L;
+            var info = GetMessageExtraInfo().ToInt64();
+            return (info & marker) == marker;
+        }
+        
         [SuppressMessage("Microsoft.StyleCop.CSharp.NamingRules", "SA1305:FieldNamesMustNotUseHungarianNotation", Justification = "Using Win32 naming for consistency.")]
         protected virtual IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
         {
@@ -491,6 +514,10 @@ namespace Avalonia.Win32
                             KeyInterop.KeyFromVirtualKey(ToInt32(wParam)), WindowsKeyboardDevice.Instance.Modifiers);
                     break;
 
+                case UnmanagedMethods.WindowsMessage.WM_MENUCHAR:
+                    // mute the system beep
+                    return (IntPtr)((Int32)UnmanagedMethods.MenuCharParam.MNC_CLOSE << 16);
+
                 case UnmanagedMethods.WindowsMessage.WM_KEYUP:
                 case UnmanagedMethods.WindowsMessage.WM_SYSKEYUP:
                     e = new RawKeyEventArgs(
@@ -512,34 +539,40 @@ namespace Avalonia.Win32
                 case UnmanagedMethods.WindowsMessage.WM_LBUTTONDOWN:
                 case UnmanagedMethods.WindowsMessage.WM_RBUTTONDOWN:
                 case UnmanagedMethods.WindowsMessage.WM_MBUTTONDOWN:
-                    e = new RawMouseEventArgs(
+                    if(ShouldIgnoreTouchEmulatedMessage())
+                        break;
+                    e = new RawPointerEventArgs(
                         WindowsMouseDevice.Instance,
                         timestamp,
                         _owner,
                         msg == (int)UnmanagedMethods.WindowsMessage.WM_LBUTTONDOWN
-                            ? RawMouseEventType.LeftButtonDown
+                            ? RawPointerEventType.LeftButtonDown
                             : msg == (int)UnmanagedMethods.WindowsMessage.WM_RBUTTONDOWN
-                                ? RawMouseEventType.RightButtonDown
-                                : RawMouseEventType.MiddleButtonDown,
+                                ? RawPointerEventType.RightButtonDown
+                                : RawPointerEventType.MiddleButtonDown,
                         DipFromLParam(lParam), GetMouseModifiers(wParam));
                     break;
 
                 case UnmanagedMethods.WindowsMessage.WM_LBUTTONUP:
                 case UnmanagedMethods.WindowsMessage.WM_RBUTTONUP:
                 case UnmanagedMethods.WindowsMessage.WM_MBUTTONUP:
-                    e = new RawMouseEventArgs(
+                    if(ShouldIgnoreTouchEmulatedMessage())
+                        break;
+                    e = new RawPointerEventArgs(
                         WindowsMouseDevice.Instance,
                         timestamp,
                         _owner,
                         msg == (int)UnmanagedMethods.WindowsMessage.WM_LBUTTONUP
-                            ? RawMouseEventType.LeftButtonUp
+                            ? RawPointerEventType.LeftButtonUp
                             : msg == (int)UnmanagedMethods.WindowsMessage.WM_RBUTTONUP
-                                ? RawMouseEventType.RightButtonUp
-                                : RawMouseEventType.MiddleButtonUp,
+                                ? RawPointerEventType.RightButtonUp
+                                : RawPointerEventType.MiddleButtonUp,
                         DipFromLParam(lParam), GetMouseModifiers(wParam));
                     break;
 
                 case UnmanagedMethods.WindowsMessage.WM_MOUSEMOVE:
+                    if(ShouldIgnoreTouchEmulatedMessage())
+                        break;
                     if (!_trackingMouse)
                     {
                         var tm = new UnmanagedMethods.TRACKMOUSEEVENT
@@ -553,11 +586,11 @@ namespace Avalonia.Win32
                         UnmanagedMethods.TrackMouseEvent(ref tm);
                     }
 
-                    e = new RawMouseEventArgs(
+                    e = new RawPointerEventArgs(
                         WindowsMouseDevice.Instance,
                         timestamp,
                         _owner,
-                        RawMouseEventType.Move,
+                        RawPointerEventType.Move,
                         DipFromLParam(lParam), GetMouseModifiers(wParam));
 
                     break;
@@ -582,29 +615,50 @@ namespace Avalonia.Win32
 
                 case UnmanagedMethods.WindowsMessage.WM_MOUSELEAVE:
                     _trackingMouse = false;
-                    e = new RawMouseEventArgs(
+                    e = new RawPointerEventArgs(
                         WindowsMouseDevice.Instance,
                         timestamp,
                         _owner,
-                        RawMouseEventType.LeaveWindow,
+                        RawPointerEventType.LeaveWindow,
                         new Point(), WindowsKeyboardDevice.Instance.Modifiers);
                     break;
 
                 case UnmanagedMethods.WindowsMessage.WM_NCLBUTTONDOWN:
                 case UnmanagedMethods.WindowsMessage.WM_NCRBUTTONDOWN:
                 case UnmanagedMethods.WindowsMessage.WM_NCMBUTTONDOWN:
-                    e = new RawMouseEventArgs(
+                    e = new RawPointerEventArgs(
                         WindowsMouseDevice.Instance,
                         timestamp,
                         _owner,
                         msg == (int)UnmanagedMethods.WindowsMessage.WM_NCLBUTTONDOWN
-                            ? RawMouseEventType.NonClientLeftButtonDown
+                            ? RawPointerEventType.NonClientLeftButtonDown
                             : msg == (int)UnmanagedMethods.WindowsMessage.WM_NCRBUTTONDOWN
-                                ? RawMouseEventType.RightButtonDown
-                                : RawMouseEventType.MiddleButtonDown,
+                                ? RawPointerEventType.RightButtonDown
+                                : RawPointerEventType.MiddleButtonDown,
                         new Point(0, 0), GetMouseModifiers(wParam));
                     break;
-
+                case WindowsMessage.WM_TOUCH:
+                    var touchInputs = new TOUCHINPUT[wParam.ToInt32()];
+                    if (GetTouchInputInfo(lParam, (uint)wParam.ToInt32(), touchInputs, Marshal.SizeOf<TOUCHINPUT>()))
+                    {
+                        foreach (var touchInput in touchInputs)
+                        {
+                            Input?.Invoke(new RawTouchEventArgs(_touchDevice, touchInput.Time,
+                                _owner,
+                                touchInput.Flags.HasFlag(TouchInputFlags.TOUCHEVENTF_UP) ?
+                                    RawPointerEventType.TouchEnd :
+                                    touchInput.Flags.HasFlag(TouchInputFlags.TOUCHEVENTF_DOWN) ?
+                                        RawPointerEventType.TouchBegin :
+                                        RawPointerEventType.TouchUpdate,
+                                PointToClient(new PixelPoint(touchInput.X / 100, touchInput.Y / 100)),
+                                WindowsKeyboardDevice.Instance.Modifiers,
+                                touchInput.Id));
+                        }
+                        CloseTouchInputHandle(lParam);
+                        return IntPtr.Zero;
+                    }
+                    
+                    break;
                 case WindowsMessage.WM_NCPAINT:
                     if (!_decorated)
                     {
@@ -620,18 +674,26 @@ namespace Avalonia.Win32
                     break;
 
                 case UnmanagedMethods.WindowsMessage.WM_PAINT:
-                    UnmanagedMethods.PAINTSTRUCT ps;
-                    if (UnmanagedMethods.BeginPaint(_hwnd, out ps) != IntPtr.Zero)
+                    using (_rendererLock.Lock())
                     {
-                        var f = Scaling;
-                        var r = ps.rcPaint;
-                        Paint?.Invoke(new Rect(r.left / f, r.top / f, (r.right - r.left) / f, (r.bottom - r.top) / f));
-                        UnmanagedMethods.EndPaint(_hwnd, ref ps);
+                        UnmanagedMethods.PAINTSTRUCT ps;
+                        if (UnmanagedMethods.BeginPaint(_hwnd, out ps) != IntPtr.Zero)
+                        {
+                            var f = Scaling;
+                            var r = ps.rcPaint;
+                            Paint?.Invoke(new Rect(r.left / f, r.top / f, (r.right - r.left) / f,
+                                (r.bottom - r.top) / f));
+                            UnmanagedMethods.EndPaint(_hwnd, ref ps);
+                        }
                     }
 
                     return IntPtr.Zero;
 
                 case UnmanagedMethods.WindowsMessage.WM_SIZE:
+                    using (_rendererLock.Lock())
+                    {
+                        // Do nothing here, just block until the pending frame render is completed on the render thread
+                    }
                     var size = (UnmanagedMethods.SizeCommand)wParam;
 
                     if (Resized != null &&
@@ -654,7 +716,7 @@ namespace Avalonia.Win32
                     return IntPtr.Zero;
 
                 case UnmanagedMethods.WindowsMessage.WM_MOVE:
-                    PositionChanged?.Invoke(new Point((short)(ToInt32(lParam) & 0xffff), (short)(ToInt32(lParam) >> 16)));
+                    PositionChanged?.Invoke(new PixelPoint((short)(ToInt32(lParam) & 0xffff), (short)(ToInt32(lParam) >> 16)));
                     return IntPtr.Zero;
 
                 case UnmanagedMethods.WindowsMessage.WM_GETMINMAXINFO:
@@ -697,7 +759,8 @@ namespace Avalonia.Win32
                 }
             }
 
-            return UnmanagedMethods.DefWindowProc(hWnd, msg, wParam, lParam);
+            using (_rendererLock.Lock())
+                return UnmanagedMethods.DefWindowProc(hWnd, msg, wParam, lParam);
         }
 
         static InputModifiers GetMouseModifiers(IntPtr wParam)
@@ -747,6 +810,10 @@ namespace Avalonia.Win32
 
             Handle = new PlatformHandle(_hwnd, PlatformConstants.WindowHandleType);
 
+            _multitouch = Win32Platform.Options.EnableMultitouch ?? false;
+            if (_multitouch)
+                RegisterTouchWindow(_hwnd, 0);
+            
             if (UnmanagedMethods.ShCoreAvailable)
             {
                 uint dpix, dpiy;
@@ -778,9 +845,9 @@ namespace Avalonia.Win32
             return new Point((short)(ToInt32(lParam) & 0xffff), (short)(ToInt32(lParam) >> 16)) / Scaling;
         }
 
-        private Point PointFromLParam(IntPtr lParam)
+        private PixelPoint PointFromLParam(IntPtr lParam)
         {
-            return new Point((short)(ToInt32(lParam) & 0xffff), (short)(ToInt32(lParam) >> 16));
+            return new PixelPoint((short)(ToInt32(lParam) & 0xffff), (short)(ToInt32(lParam) >> 16));
         }
 
         private Point ScreenToClient(Point point)
