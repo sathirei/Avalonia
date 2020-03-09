@@ -231,13 +231,16 @@ namespace Avalonia.Input.UnitTests
                 root,
                 RawPointerEventType.Move,
                 p,
-                InputModifiers.None));
+                RawInputModifiers.None));
         }
 
         private void SetHit(Mock<IRenderer> renderer, IControl hit)
         {
             renderer.Setup(x => x.HitTest(It.IsAny<Point>(), It.IsAny<IVisual>(), It.IsAny<Func<IVisual, bool>>()))
                 .Returns(new[] { hit });
+
+            renderer.Setup(x => x.HitTestFirst(It.IsAny<Point>(), It.IsAny<IVisual>(), It.IsAny<Func<IVisual, bool>>()))
+                .Returns(hit);
         }
 
         private IDisposable TestApplication(IRenderer renderer)

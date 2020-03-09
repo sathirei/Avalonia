@@ -14,7 +14,7 @@ jobs:
     displayName: 'Install Nuke'
     inputs:
       script: |
-         dotnet tool install --global Nuke.GlobalTool --version 0.12.3
+         dotnet tool install --global Nuke.GlobalTool --version 0.24.0
   - task: CmdLine@2
     displayName: 'Run Nuke'
     inputs:
@@ -34,9 +34,17 @@ jobs:
   pool:
     vmImage: 'macOS-10.14'
   steps:
-  - task: DotNetCoreInstaller@0
+  - task: UseDotNet@2
+    displayName: 'Use .NET Core SDK 3.1.x'
     inputs:
-      version: '2.1.403'
+      packageType: sdk
+      version: 3.1.x
+
+  - task: UseDotNet@2
+    displayName: 'Use .NET Core Runtime 3.1.x'
+    inputs:
+      packageType: runtime
+      version: 3.1.x
 
   - task: CmdLine@2
     displayName: 'Install Mono 5.18'
@@ -52,7 +60,7 @@ jobs:
       sdk: 'macosx10.14'
       configuration: 'Release'
       xcWorkspacePath: '**/*.xcodeproj/project.xcworkspace'
-      xcodeVersion: 'default' # Options: 8, 9, default, specifyPath
+      xcodeVersion: '10' # Options: 8, 9, default, specifyPath
       args: '-derivedDataPath ./'
 
   - task: CmdLine@2
@@ -66,7 +74,7 @@ jobs:
     displayName: 'Install Nuke'
     inputs:
       script: |
-       dotnet tool install --global Nuke.GlobalTool --version 0.12.3 
+       dotnet tool install --global Nuke.GlobalTool --version 0.24.0
 
   - task: CmdLine@2
     displayName: 'Run Nuke'
@@ -108,7 +116,7 @@ jobs:
     displayName: 'Install Nuke'
     inputs:
       script: |
-       dotnet tool install --global Nuke.GlobalTool --version 0.12.3 
+       dotnet tool install --global Nuke.GlobalTool --version 0.24.0 
 
   - task: CmdLine@2
     displayName: 'Run Nuke'
@@ -134,3 +142,4 @@ jobs:
       pathToPublish: '$(Build.SourcesDirectory)/artifacts/zip'
       artifactName: 'Samples'
     condition: succeeded()
+

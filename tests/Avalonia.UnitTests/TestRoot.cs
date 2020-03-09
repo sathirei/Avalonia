@@ -5,6 +5,7 @@ using System;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Layout;
+using Avalonia.LogicalTree;
 using Avalonia.Media;
 using Avalonia.Platform;
 using Avalonia.Rendering;
@@ -14,7 +15,7 @@ using Moq;
 
 namespace Avalonia.UnitTests
 {
-    public class TestRoot : Decorator, IFocusScope, ILayoutRoot, IInputRoot, IRenderRoot, IStyleRoot
+    public class TestRoot : Decorator, IFocusScope, ILayoutRoot, IInputRoot, IRenderRoot, IStyleHost, ILogicalRoot
     {
         private readonly NameScope _nameScope = new NameScope();
 
@@ -24,8 +25,19 @@ namespace Avalonia.UnitTests
         }
 
         public TestRoot(IControl child)
+            : this(false, child)
+        {
+            Child = child;
+        }
+
+        public TestRoot(bool useGlobalStyles, IControl child)
             : this()
         {
+            if (useGlobalStyles)
+            {
+                StylingParent = UnitTestApplication.Current;
+            }
+
             Child = child;
         }
 

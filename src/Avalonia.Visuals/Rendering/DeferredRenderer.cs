@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using Avalonia.Logging;
 using Avalonia.Media;
 using Avalonia.Media.Immutable;
 using Avalonia.Platform;
@@ -159,14 +160,21 @@ namespace Avalonia.Rendering
         /// <inheritdoc/>
         public IEnumerable<IVisual> HitTest(Point p, IVisual root, Func<IVisual, bool> filter)
         {
-            if (_renderLoop == null && (_dirty == null || _dirty.Count > 0))
-            {
-                // When unit testing the renderLoop may be null, so update the scene manually.
-                UpdateScene();
-            }
+            EnsureCanHitTest();
+
             //It's safe to access _scene here without a lock since
             //it's only changed from UI thread which we are currently on
             return _scene?.Item.HitTest(p, root, filter) ?? Enumerable.Empty<IVisual>();
+        }
+
+        /// <inheritdoc/>
+        public IVisual HitTestFirst(Point p, IVisual root, Func<IVisual, bool> filter)
+        {
+            EnsureCanHitTest();
+
+            //It's safe to access _scene here without a lock since
+            //it's only changed from UI thread which we are currently on
+            return _scene?.Item.HitTestFirst(p, root, filter);
         }
 
         /// <inheritdoc/>
@@ -234,6 +242,15 @@ namespace Avalonia.Rendering
 
         internal Scene UnitTestScene() => _scene.Item;
 
+        private void EnsureCanHitTest()
+        {
+            if (_renderLoop == null && (_dirty == null || _dirty.Count > 0))
+            {
+                // When unit testing the renderLoop may be null, so update the scene manually.
+                UpdateScene();
+            }
+        }
+
         private void Render(bool forceComposite)
         {
             using (var l = _lock.TryLock())
@@ -246,22 +263,7 @@ namespace Avalonia.Rendering
                 {
                     try
                     {
-                        IDrawingContextImpl GetContext()
-                        {
-                            if (context != null)
-                                return context;
-                            if ((RenderTarget as IRenderTargetWithCorruptionInfo)?.IsCorrupted == true)
-                            {
-                                RenderTarget.Dispose();
-                                RenderTarget = null;
-                            }
-                            if (RenderTarget == null)
-                                RenderTarget = ((IRenderRoot)_root).CreateRenderTarget();
-                            return context = RenderTarget.CreateDrawingContext(this);
-
-                        }
-
-                        var (scene, updated) = UpdateRenderLayersAndConsumeSceneIfNeeded(GetContext);
+                        var (scene, updated) = UpdateRenderLayersAndConsumeSceneIfNeeded(ref context);
 
                         using (scene)
                         {
@@ -271,9 +273,9 @@ namespace Avalonia.Rendering
                                 if (DrawDirtyRects)
                                     _dirtyRectsDisplay.Tick();
                                 if (overlay)
-                                    RenderOverlay(scene.Item, GetContext());
+                                    RenderOverlay(scene.Item, ref context);
                                 if (updated || forceComposite || overlay)
-                                    RenderComposite(scene.Item, GetContext());
+                                    RenderComposite(scene.Item, ref context);
                             }
                         }
                     }
@@ -284,14 +286,14 @@ namespace Avalonia.Rendering
                 }
                 catch (RenderTargetCorruptedException ex)
                 {
-                    Logging.Logger.Information("Renderer", this, "Render target was corrupted. Exception: {0}", ex);
+                    Logger.TryGet(LogEventLevel.Information)?.Log("Renderer", this, "Render target was corrupted. Exception: {0}", ex);
                     RenderTarget?.Dispose();
                     RenderTarget = null;
                 }
             }
         }
 
-        private (IRef<Scene> scene, bool updated) UpdateRenderLayersAndConsumeSceneIfNeeded(Func<IDrawingContextImpl> contextFactory,
+        private (IRef<Scene> scene, bool updated) UpdateRenderLayersAndConsumeSceneIfNeeded(ref IDrawingContextImpl context,
             bool recursiveCall = false)
         {
             IRef<Scene> sceneRef;
@@ -304,7 +306,8 @@ namespace Avalonia.Rendering
                 var scene = sceneRef.Item;
                 if (scene.Generation != _lastSceneId)
                 {
-                    var context = contextFactory();
+                    EnsureDrawingContext(ref context);
+
                     Layers.Update(scene, context);
 
                     RenderToLayers(scene);
@@ -325,7 +328,7 @@ namespace Avalonia.Rendering
                     if (!recursiveCall && Dispatcher.UIThread.CheckAccess() && NeedsUpdate)
                     {
                         UpdateScene();
-                        var (rs, _) = UpdateRenderLayersAndConsumeSceneIfNeeded(contextFactory, true);
+                        var (rs, _) = UpdateRenderLayersAndConsumeSceneIfNeeded(ref context, true);
                         return (rs, true);
                     }
 
@@ -432,8 +435,10 @@ namespace Avalonia.Rendering
                 
         }
 
-        private void RenderOverlay(Scene scene, IDrawingContextImpl parentContent)
+        private void RenderOverlay(Scene scene, ref IDrawingContextImpl parentContent)
         {
+            EnsureDrawingContext(ref parentContent);
+
             if (DrawDirtyRects)
             {
                 var overlay = GetOverlay(parentContent, scene.Size, scene.Scaling);
@@ -456,12 +461,14 @@ namespace Avalonia.Rendering
             foreach (var r in _dirtyRectsDisplay)
             {
                 var brush = new ImmutableSolidColorBrush(Colors.Magenta, r.Opacity);
-                context.FillRectangle(brush, r.Rect);
+                context.DrawRectangle(brush,null, r.Rect);
             }
         }
 
-        private void RenderComposite(Scene scene, IDrawingContextImpl context)
+        private void RenderComposite(Scene scene, ref IDrawingContextImpl context)
         {
+            EnsureDrawingContext(ref context);
+
             context.Clear(Colors.Transparent);
 
             var clientRect = new Rect(scene.Size);
@@ -478,11 +485,11 @@ namespace Avalonia.Rendering
 
                 if (layer.OpacityMask == null)
                 {
-                    context.DrawImage(bitmap, layer.Opacity, sourceRect, clientRect);
+                    context.DrawBitmap(bitmap, layer.Opacity, sourceRect, clientRect);
                 }
                 else
                 {
-                    context.DrawImage(bitmap, layer.OpacityMask, layer.OpacityMaskRect, sourceRect);
+                    context.DrawBitmap(bitmap, layer.OpacityMask, layer.OpacityMaskRect, sourceRect);
                 }
 
                 if (layer.GeometryClip != null)
@@ -494,13 +501,34 @@ namespace Avalonia.Rendering
             if (_overlay != null)
             {
                 var sourceRect = new Rect(0, 0, _overlay.Item.PixelSize.Width, _overlay.Item.PixelSize.Height);
-                context.DrawImage(_overlay, 0.5, sourceRect, clientRect);
+                context.DrawBitmap(_overlay, 0.5, sourceRect, clientRect);
             }
 
             if (DrawFps)
             {
                 RenderFps(context, clientRect, scene.Layers.Count);
             }
+        }
+
+        private void EnsureDrawingContext(ref IDrawingContextImpl context)
+        {
+            if (context != null)
+            {
+                return;
+            }
+
+            if ((RenderTarget as IRenderTargetWithCorruptionInfo)?.IsCorrupted == true)
+            {
+                RenderTarget.Dispose();
+                RenderTarget = null;
+            }
+
+            if (RenderTarget == null)
+            {
+                RenderTarget = ((IRenderRoot)_root).CreateRenderTarget();
+            }
+
+            context = RenderTarget.CreateDrawingContext(this);
         }
 
         private void UpdateScene()

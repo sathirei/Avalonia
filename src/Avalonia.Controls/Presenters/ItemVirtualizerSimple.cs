@@ -188,8 +188,8 @@ namespace Avalonia.Controls.Presenters
                         break;
 
                     case NotifyCollectionChangedAction.Remove:
-                        if (e.OldStartingIndex >= FirstIndex &&
-                            e.OldStartingIndex < NextIndex)
+                        if ((e.OldStartingIndex >= FirstIndex && e.OldStartingIndex < NextIndex) ||
+                            panel.Children.Count > ItemCount)
                         {
                             RecycleContainersOnRemove();
                         }
@@ -295,11 +295,14 @@ namespace Avalonia.Controls.Presenters
         /// <inheritdoc/>
         public override void ScrollIntoView(object item)
         {
-            var index = Items.IndexOf(item);
-
-            if (index != -1)
+            if (Items != null)
             {
-                ScrollIntoView(index);
+                var index = Items.IndexOf(item);
+
+                if (index != -1)
+                {
+                    ScrollIntoView(index);
+                }
             }
         }
 

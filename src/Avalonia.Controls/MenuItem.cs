@@ -26,8 +26,8 @@ namespace Avalonia.Controls
         /// </summary>
         public static readonly DirectProperty<MenuItem, ICommand> CommandProperty =
             Button.CommandProperty.AddOwner<MenuItem>(
-                menuItem => menuItem.Command, 
-                (menuItem, command) => menuItem.Command = command, 
+                menuItem => menuItem.Command,
+                (menuItem, command) => menuItem.Command = command,
                 enableDataValidation: true);
 
         /// <summary>
@@ -102,13 +102,13 @@ namespace Avalonia.Controls
             SelectableMixin.Attach<MenuItem>(IsSelectedProperty);
             CommandProperty.Changed.Subscribe(CommandChanged);
             FocusableProperty.OverrideDefaultValue<MenuItem>(true);
-            HeaderProperty.Changed.AddClassHandler<MenuItem>(x => x.HeaderChanged);
-            IconProperty.Changed.AddClassHandler<MenuItem>(x => x.IconChanged);
-            IsSelectedProperty.Changed.AddClassHandler<MenuItem>(x => x.IsSelectedChanged);
+            HeaderProperty.Changed.AddClassHandler<MenuItem>((x, e) => x.HeaderChanged(e));
+            IconProperty.Changed.AddClassHandler<MenuItem>((x, e) => x.IconChanged(e));
+            IsSelectedProperty.Changed.AddClassHandler<MenuItem>((x, e) => x.IsSelectedChanged(e));
             ItemsPanelProperty.OverrideDefaultValue<MenuItem>(DefaultPanel);
-            ClickEvent.AddClassHandler<MenuItem>(x => x.OnClick);
-            SubmenuOpenedEvent.AddClassHandler<MenuItem>(x => x.OnSubmenuOpened);
-            IsSubMenuOpenProperty.Changed.AddClassHandler<MenuItem>(x => x.SubMenuOpenChanged);
+            ClickEvent.AddClassHandler<MenuItem>((x, e) => x.OnClick(e));
+            SubmenuOpenedEvent.AddClassHandler<MenuItem>((x, e) => x.OnSubmenuOpened(e));
+            IsSubMenuOpenProperty.Changed.AddClassHandler<MenuItem>((x, e) => x.SubMenuOpenChanged(e));
         }
 
         public MenuItem()
@@ -224,7 +224,7 @@ namespace Avalonia.Controls
         public bool IsTopLevel => Parent is Menu;
 
         /// <inheritdoc/>
-        bool IMenuItem.IsPointerOverSubMenu => _popup.PopupRoot?.IsPointerOver ?? false;
+        bool IMenuItem.IsPointerOverSubMenu => _popup?.IsPointerOverPopup ?? false; 
 
         /// <inheritdoc/>
         IMenuElement IMenuItem.Parent => Parent as IMenuElement;
@@ -337,9 +337,9 @@ namespace Avalonia.Controls
         {
             base.OnPointerEnter(e);
 
-            var point = e.GetPointerPoint(null);
+            var point = e.GetCurrentPoint(null);
             RaiseEvent(new PointerEventArgs(PointerEnterItemEvent, this, e.Pointer, this.VisualRoot, point.Position,
-                e.Timestamp, point.Properties, e.InputModifiers));
+                e.Timestamp, point.Properties, e.KeyModifiers));
         }
 
         /// <inheritdoc/>
@@ -347,9 +347,9 @@ namespace Avalonia.Controls
         {
             base.OnPointerLeave(e);
 
-            var point = e.GetPointerPoint(null);
+            var point = e.GetCurrentPoint(null);
             RaiseEvent(new PointerEventArgs(PointerLeaveItemEvent, this, e.Pointer, this.VisualRoot, point.Position,
-                e.Timestamp, point.Properties, e.InputModifiers));
+                e.Timestamp, point.Properties, e.KeyModifiers));
         }
 
         /// <summary>
@@ -394,12 +394,12 @@ namespace Avalonia.Controls
             }
         }
 
-        protected override void UpdateDataValidation(AvaloniaProperty property, BindingNotification status)
+        protected override void UpdateDataValidation<T>(AvaloniaProperty<T> property, BindingValue<T> value)
         {
-            base.UpdateDataValidation(property, status);
+            base.UpdateDataValidation(property, value);
             if (property == CommandProperty)
             {
-                if (status?.ErrorType == BindingErrorType.Error)
+                if (value.Type == BindingValueType.BindingError)
                 {
                     if (_commandCanExecute)
                     {

@@ -119,6 +119,11 @@ namespace Avalonia.Rendering.SceneGraph
                 throw new ObjectDisposedException("Visual node for {node.Visual}");
             }
 
+            if (child.Parent != this)
+            {
+                throw new AvaloniaInternalException("VisualNode added to wrong parent.");
+            }
+
             EnsureChildrenCreated();
             _children.Add(child);
         }
@@ -153,6 +158,11 @@ namespace Avalonia.Rendering.SceneGraph
             if (node.Disposed)
             {
                 throw new ObjectDisposedException("Visual node for {node.Visual}");
+            }
+
+            if (node.Parent != this)
+            {
+                throw new AvaloniaInternalException("VisualNode added to wrong parent.");
             }
 
             EnsureChildrenCreated();
@@ -218,7 +228,7 @@ namespace Avalonia.Rendering.SceneGraph
             if (first < _children?.Count)
             {
                 EnsureChildrenCreated();
-                for (int i = first; i < _children.Count - first; i++)
+                for (int i = first; i < _children.Count; i++)
                 {
                     _children[i].Dispose();
                 }
@@ -270,8 +280,13 @@ namespace Avalonia.Rendering.SceneGraph
         /// <inheritdoc/>
         public bool HitTest(Point p)
         {
-            foreach (var operation in DrawOperations)
+            var drawOperations = DrawOperations;
+            var drawOperationsCount = drawOperations.Count;
+
+            for (var i = 0; i < drawOperationsCount; i++)
             {
+                var operation = drawOperations[i];
+
                 if (operation?.Item?.HitTest(p) == true)
                 {
                     return true;

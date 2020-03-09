@@ -142,6 +142,7 @@ namespace Avalonia.Markup.Xaml.UnitTests.Xaml
 
                 window.DataContext = new { Foo = "foo" };
                 window.ApplyTemplate();
+                window.Presenter.ApplyTemplate();
 
                 Assert.Equal("foo", border.DataContext);
             }
@@ -309,8 +310,12 @@ namespace Avalonia.Markup.Xaml.UnitTests.Xaml
             }
         }
 
-        [Fact]
-        public void Binding_To_TextBlock_Text_With_StringConverter_Works()
+        [Theory,
+            InlineData(@"Hello \{0\}"),
+            InlineData(@"'Hello {0}'"),
+            InlineData(@"Hello {0}")]
+        
+        public void Binding_To_TextBlock_Text_With_StringConverter_Works(string fmt)
         {
             using (UnitTestApplication.Start(TestServices.StyledWindow))
             {
@@ -318,8 +323,8 @@ namespace Avalonia.Markup.Xaml.UnitTests.Xaml
 <Window xmlns='https://github.com/avaloniaui'
         xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml'
         xmlns:local='clr-namespace:Avalonia.Markup.Xaml.UnitTests.Xaml;assembly=Avalonia.Markup.Xaml.UnitTests'>
-    <TextBlock Name='textBlock' Text='{Binding Foo, StringFormat=Hello \{0\}}'/> 
-</Window>"; 
+    <TextBlock Name='textBlock' Text=""{Binding Foo, StringFormat=" + fmt + @"}""/> 
+</Window>";
                 var loader = new AvaloniaXamlLoader();
                 var window = (Window)loader.Load(xaml); 
                 var textBlock = window.FindControl<TextBlock>("textBlock"); 
@@ -331,8 +336,10 @@ namespace Avalonia.Markup.Xaml.UnitTests.Xaml
             }
         }
 
-        [Fact(Skip="Issue #2592")]
-        public void MultiBinding_To_TextBlock_Text_With_StringConverter_Works()
+        [Theory,
+            InlineData("{}{0} {1}!"),
+            InlineData(@"\{0\} \{1\}!")]
+        public void MultiBinding_To_TextBlock_Text_With_StringConverter_Works(string fmt)
         {
             using (UnitTestApplication.Start(TestServices.StyledWindow))
             {
@@ -342,7 +349,7 @@ namespace Avalonia.Markup.Xaml.UnitTests.Xaml
         xmlns:local='clr-namespace:Avalonia.Markup.Xaml.UnitTests.Xaml;assembly=Avalonia.Markup.Xaml.UnitTests'>
     <TextBlock Name='textBlock'>
         <TextBlock.Text>
-            <MultiBinding StringFormat='\{0\} \{1\}!'>
+            <MultiBinding StringFormat='" + fmt + @"'>
                 <Binding Path='Greeting1'/>
                 <Binding Path='Greeting2'/>
             </MultiBinding>

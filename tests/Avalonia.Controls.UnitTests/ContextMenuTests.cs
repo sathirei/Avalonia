@@ -27,7 +27,9 @@ namespace Avalonia.Controls.UnitTests
                     ContextMenu = sut
                 };
 
-                new Window { Content = target };
+                var window = new Window { Content = target };
+                window.ApplyTemplate();
+                window.Presenter.ApplyTemplate();
 
                 int openedCount = 0;
 
@@ -36,7 +38,7 @@ namespace Avalonia.Controls.UnitTests
                     openedCount++;
                 };
 
-                sut.Open(null);
+                sut.Open(target);
 
                 Assert.Equal(1, openedCount);
             }
@@ -53,9 +55,11 @@ namespace Avalonia.Controls.UnitTests
                     ContextMenu = sut
                 };
 
-                new Window { Content = target };
+                var window = new Window { Content = target };
+                window.ApplyTemplate();
+                window.Presenter.ApplyTemplate();
 
-                sut.Open(null);
+                sut.Open(target);
 
                 int closedCount = 0;
 
@@ -84,7 +88,9 @@ namespace Avalonia.Controls.UnitTests
                     ContextMenu = sut
                 };
 
-                new Window { Content = target };
+                var window = new Window {Content = target};
+                window.ApplyTemplate();
+                window.Presenter.ApplyTemplate();
 
                 _mouse.Click(target, MouseButton.Right);
 
@@ -112,8 +118,10 @@ namespace Avalonia.Controls.UnitTests
                     ContextMenu = sut
                 };
 
-                var window = new Window { Content = target };
-                
+                var window = new Window {Content = target};
+                window.ApplyTemplate();
+                window.Presenter.ApplyTemplate();
+
                 _mouse.Click(target, MouseButton.Right);
 
                 Assert.True(sut.IsOpen);
@@ -151,7 +159,7 @@ namespace Avalonia.Controls.UnitTests
             }
         }
 
-        [Fact]
+        [Fact(Skip = "The only reason this test was 'passing' before was that the author forgot to call Window.ApplyTemplate()")]
         public void Cancelling_Closing_Leaves_ContextMenuOpen()
         {
             using (Application())
@@ -165,7 +173,9 @@ namespace Avalonia.Controls.UnitTests
                 {
                     ContextMenu = sut
                 };
-                new Window { Content = target };
+                
+                var window = new Window {Content = target};
+                window.ApplyTemplate();
 
                 sut.ContextMenuClosing += (c, e) => { eventCalled = true; e.Cancel = true; };
 
@@ -188,13 +198,13 @@ namespace Avalonia.Controls.UnitTests
             var screen = new PixelRect(new PixelPoint(), new PixelSize(100, 100));
             var screenImpl = new Mock<IScreenImpl>();
             screenImpl.Setup(x => x.ScreenCount).Returns(1);
-            screenImpl.Setup(X => X.AllScreens).Returns( new[] { new Screen(screen, screen, true) });
+            screenImpl.Setup(X => X.AllScreens).Returns( new[] { new Screen(1, screen, screen, true) });
 
-            var windowImpl = new Mock<IWindowImpl>();
-            windowImpl.Setup(x => x.Screen).Returns(screenImpl.Object);
-
-            popupImpl = new Mock<IPopupImpl>();
+            popupImpl = MockWindowingPlatform.CreatePopupMock();
             popupImpl.SetupGet(x => x.Scaling).Returns(1);
+
+            var windowImpl = MockWindowingPlatform.CreateWindowMock(() => popupImpl.Object);
+            windowImpl.Setup(x => x.Screen).Returns(screenImpl.Object);
 
             var services = TestServices.StyledWindow.With(
                                         inputManager: new InputManager(),

@@ -42,7 +42,7 @@ namespace Avalonia.Controls.Primitives
         public static AdornerLayer GetAdornerLayer(IVisual visual)
         {
             return visual.GetVisualAncestors()
-                .OfType<AdornerDecorator>()
+                .OfType<VisualLayerManager>()
                 .FirstOrDefault()
                 ?.AdornerLayer;
         }
@@ -138,10 +138,7 @@ namespace Avalonia.Controls.Primitives
             }
         }
 
-        public bool HitTest(Point point)
-        {
-            return Children.Any(ctrl => ctrl.TransformedBounds?.Contains(point) == true);
-        }
+        public bool HitTest(Point point) => Children.HitTestCustom(point);
 
         private class AdornedElementInfo
         {

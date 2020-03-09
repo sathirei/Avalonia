@@ -129,12 +129,18 @@ namespace Avalonia.Controls
 
             ShowInTaskbarProperty.Changed.AddClassHandler<Window>((w, e) => w.PlatformImpl?.ShowTaskbarIcon((bool)e.NewValue));
 
-            IconProperty.Changed.AddClassHandler<Window>((s, e) => s.PlatformImpl?.SetIcon(((WindowIcon)e.NewValue).PlatformImpl));
+            IconProperty.Changed.AddClassHandler<Window>((s, e) => s.PlatformImpl?.SetIcon(((WindowIcon)e.NewValue)?.PlatformImpl));
 
             CanResizeProperty.Changed.AddClassHandler<Window>((w, e) => w.PlatformImpl?.CanResize((bool)e.NewValue));
 
             WindowStateProperty.Changed.AddClassHandler<Window>(
                 (w, e) => { if (w.PlatformImpl != null) w.PlatformImpl.WindowState = (WindowState)e.NewValue; });
+            
+            MinWidthProperty.Changed.AddClassHandler<Window>((w, e) => w.PlatformImpl?.SetMinMaxSize(new Size((double)e.NewValue, w.MinHeight), new Size(w.MaxWidth, w.MaxHeight)));
+            MinHeightProperty.Changed.AddClassHandler<Window>((w, e) => w.PlatformImpl?.SetMinMaxSize(new Size(w.MinWidth, (double)e.NewValue), new Size(w.MaxWidth, w.MaxHeight)));
+            MaxWidthProperty.Changed.AddClassHandler<Window>((w, e) => w.PlatformImpl?.SetMinMaxSize(new Size(w.MinWidth, w.MinHeight), new Size((double)e.NewValue, w.MaxHeight)));
+            MaxHeightProperty.Changed.AddClassHandler<Window>((w, e) => w.PlatformImpl?.SetMinMaxSize(new Size(w.MinWidth, w.MinHeight), new Size(w.MaxWidth, (double)e.NewValue)));
+
         }
 
         /// <summary>
@@ -155,6 +161,7 @@ namespace Avalonia.Controls
             impl.Closing = HandleClosing;
             impl.WindowStateChanged = HandleWindowStateChanged;
             _maxPlatformClientSize = PlatformImpl?.MaxClientSize ?? default(Size);
+            this.GetObservable(ClientSizeProperty).Skip(1).Subscribe(x => PlatformImpl?.Resize(x));
         }
 
         /// <summary>
@@ -239,6 +246,44 @@ namespace Avalonia.Controls
             set { SetAndRaise(WindowStartupLocationProperty, ref _windowStartupLocation, value); }
         }
 
+        /// <summary>
+        /// Gets or sets the window position in screen coordinates.
+        /// </summary>
+        public PixelPoint Position
+        {
+            get { return PlatformImpl?.Position ?? PixelPoint.Origin; }
+            set
+            {
+                PlatformImpl?.Move(value);
+            }
+        }
+        
+        /// <summary>
+        /// Starts moving a window with left button being held. Should be called from left mouse button press event handler
+        /// </summary>
+        public void BeginMoveDrag(PointerPressedEventArgs e) => PlatformImpl?.BeginMoveDrag(e);
+
+        /// <summary>
+        /// Starts resizing a window. This function is used if an application has window resizing controls. 
+        /// Should be called from left mouse button press event handler
+        /// </summary>
+        public void BeginResizeDrag(WindowEdge edge, PointerPressedEventArgs e) => PlatformImpl?.BeginResizeDrag(edge, e);
+        
+        /// <summary>
+        /// Carries out the arrange pass of the window.
+        /// </summary>
+        /// <param name="finalSize">The final window size.</param>
+        /// <returns>The <paramref name="finalSize"/> parameter unchanged.</returns>
+        protected override Size ArrangeOverride(Size finalSize)
+        {
+            using (BeginAutoSizing())
+            {
+                PlatformImpl?.Resize(finalSize);
+            }
+
+            return base.ArrangeOverride(PlatformImpl?.ClientSize ?? default(Size));
+        }
+        
         /// <inheritdoc/>
         Size ILayoutRoot.MaxClientSize => _maxPlatformClientSize;
 
@@ -291,7 +336,6 @@ namespace Avalonia.Controls
                 if (close)
                 {
                     PlatformImpl?.Dispose();
-                    HandleClosed();
                 }
             }
         }
@@ -485,7 +529,7 @@ namespace Avalonia.Controls
         {
             var sizeToContent = SizeToContent;
             var clientSize = ClientSize;
-            Size constraint = clientSize;
+            var constraint = availableSize;
 
             if ((sizeToContent & SizeToContent.Width) != 0)
             {
@@ -512,7 +556,7 @@ namespace Avalonia.Controls
             return result;
         }
 
-        protected override void HandleClosed()
+        protected sealed override void HandleClosed()
         {
             RaiseEvent(new RoutedEventArgs(WindowClosedEvent));
 
@@ -520,7 +564,7 @@ namespace Avalonia.Controls
         }
 
         /// <inheritdoc/>
-        protected override void HandleResized(Size clientSize)
+        protected sealed override void HandleResized(Size clientSize)
         {
             if (!AutoSizing)
             {

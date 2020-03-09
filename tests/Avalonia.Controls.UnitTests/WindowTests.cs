@@ -228,8 +228,7 @@ namespace Avalonia.Controls.UnitTests
         {
             using (UnitTestApplication.Start(TestServices.StyledWindow))
             {
-                var windowImpl = Mock.Of<IWindowImpl>(x => x.Scaling == 1);
-                var target = new Window(windowImpl);
+                var target = new Window();
 
                 target.Show();
                 target.Close();
@@ -271,14 +270,13 @@ namespace Avalonia.Controls.UnitTests
         [Fact]
         public void Window_Should_Be_Centered_When_WindowStartupLocation_Is_CenterScreen()
         {
-            var screen1 = new Mock<Screen>(new PixelRect(new PixelSize(1920, 1080)), new PixelRect(new PixelSize(1920, 1040)), true);
-            var screen2 = new Mock<Screen>(new PixelRect(new PixelSize(1366, 768)), new PixelRect(new PixelSize(1366, 728)), false);
+            var screen1 = new Mock<Screen>(1.0, new PixelRect(new PixelSize(1920, 1080)), new PixelRect(new PixelSize(1920, 1040)), true);
+            var screen2 = new Mock<Screen>(1.0, new PixelRect(new PixelSize(1366, 768)), new PixelRect(new PixelSize(1366, 728)), false);
 
             var screens = new Mock<IScreenImpl>();
             screens.Setup(x => x.AllScreens).Returns(new Screen[] { screen1.Object, screen2.Object });
 
-            var windowImpl = new Mock<IWindowImpl>();
-            windowImpl.SetupProperty(x => x.Position);
+            var windowImpl = MockWindowingPlatform.CreateWindowMock();
             windowImpl.Setup(x => x.ClientSize).Returns(new Size(800, 480));
             windowImpl.Setup(x => x.Scaling).Returns(1);
             windowImpl.Setup(x => x.Screen).Returns(screens.Object);
@@ -302,14 +300,12 @@ namespace Avalonia.Controls.UnitTests
         [Fact]
         public void Window_Should_Be_Centered_Relative_To_Owner_When_WindowStartupLocation_Is_CenterOwner()
         {
-            var parentWindowImpl = new Mock<IWindowImpl>();
-            parentWindowImpl.SetupProperty(x => x.Position);
+            var parentWindowImpl = MockWindowingPlatform.CreateWindowMock();
             parentWindowImpl.Setup(x => x.ClientSize).Returns(new Size(800, 480));
             parentWindowImpl.Setup(x => x.MaxClientSize).Returns(new Size(1920, 1080));
             parentWindowImpl.Setup(x => x.Scaling).Returns(1);
 
-            var windowImpl = new Mock<IWindowImpl>();
-            windowImpl.SetupProperty(x => x.Position);
+            var windowImpl = MockWindowingPlatform.CreateWindowMock();
             windowImpl.Setup(x => x.ClientSize).Returns(new Size(320, 200));
             windowImpl.Setup(x => x.MaxClientSize).Returns(new Size(1920, 1080));
             windowImpl.Setup(x => x.Scaling).Returns(1);
@@ -345,11 +341,62 @@ namespace Avalonia.Controls.UnitTests
             }
         }
 
+        [Fact]
+        public void Child_Should_Be_Measured_With_Width_And_Height_If_SizeToContent_Is_Manual()
+        {
+            using (UnitTestApplication.Start(TestServices.StyledWindow))
+            {
+                var child = new ChildControl();
+                var target = new Window 
+                { 
+                    Width = 100,
+                    Height = 50,
+                    SizeToContent = SizeToContent.Manual,
+                    Content = child 
+                };
+
+                target.Show();
+
+                Assert.Equal(new Size(100, 50), child.MeasureSize);
+            }
+        }
+
+        [Fact]
+        public void Child_Should_Be_Measured_With_Infinity_If_SizeToContent_Is_WidthAndHeight()
+        {
+            using (UnitTestApplication.Start(TestServices.StyledWindow))
+            {
+                var child = new ChildControl();
+                var target = new Window
+                {
+                    Width = 100,
+                    Height = 50,
+                    SizeToContent = SizeToContent.WidthAndHeight,
+                    Content = child
+                };
+
+                target.Show();
+
+                Assert.Equal(Size.Infinity, child.MeasureSize);
+            }
+        }
+
         private IWindowImpl CreateImpl(Mock<IRenderer> renderer)
         {
             return Mock.Of<IWindowImpl>(x =>
                 x.Scaling == 1 &&
                 x.CreateRenderer(It.IsAny<IRenderRoot>()) == renderer.Object);
+        }
+
+        private class ChildControl : Control
+        {
+            public Size MeasureSize { get; private set; }
+
+            protected override Size MeasureOverride(Size availableSize)
+            {
+                MeasureSize = availableSize;
+                return base.MeasureOverride(availableSize);
+            }
         }
     }
 }

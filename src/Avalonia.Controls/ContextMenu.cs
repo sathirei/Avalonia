@@ -91,6 +91,8 @@ namespace Avalonia.Controls
         /// <param name="control">The control.</param>
         public void Open(Control control)
         {
+            if (control == null)
+                throw new ArgumentNullException(nameof(control));
             if (IsOpen)
             {
                 return;
@@ -102,8 +104,7 @@ namespace Avalonia.Controls
                 {
                     PlacementMode = PlacementMode.Pointer,
                     PlacementTarget = control,
-                    StaysOpen = false,
-                    ObeyScreenEdges = true
+                    StaysOpen = false
                 };
 
                 _popup.Opened += PopupOpened;
@@ -190,7 +191,7 @@ namespace Avalonia.Controls
                 e.Handled = true;
             }
 
-            if (e.MouseButton == MouseButton.Right)
+            if (e.InitialPressMouseButton == MouseButton.Right)
             {
                 if (contextMenu.CancelOpening())
                     return;

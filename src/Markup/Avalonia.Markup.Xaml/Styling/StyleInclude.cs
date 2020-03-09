@@ -4,13 +4,14 @@
 using Avalonia.Styling;
 using System;
 using Avalonia.Controls;
+using System.Collections.Generic;
 
 namespace Avalonia.Markup.Xaml.Styling
 {
     /// <summary>
     /// Includes a style from a URL.
     /// </summary>
-    public class StyleInclude : IStyle, ISetStyleParent
+    public class StyleInclude : IStyle, ISetResourceParent
     {
         private Uri _baseUri;
         private IStyle _loaded;
@@ -53,7 +54,7 @@ namespace Avalonia.Markup.Xaml.Styling
                 {
                     var loader = new AvaloniaXamlLoader();
                     _loaded = (IStyle)loader.Load(Source, _baseUri);
-                    (_loaded as ISetStyleParent)?.SetParent(this);
+                    (_loaded as ISetResourceParent)?.SetParent(this);
                 }
 
                 return _loaded;
@@ -67,35 +68,19 @@ namespace Avalonia.Markup.Xaml.Styling
         IResourceNode IResourceNode.ResourceParent => _parent;
 
         /// <inheritdoc/>
-        public bool Attach(IStyleable control, IStyleHost container)
-        {
-            if (Source != null)
-            {
-                return Loaded.Attach(control, container);
-            }
-
-            return false;
-        }
-
-        public void Detach()
-        {
-            if (Source != null)
-            {
-                Loaded.Detach();
-            }
-        }
+        public SelectorMatchResult TryAttach(IStyleable target, IStyleHost host) => Loaded.TryAttach(target, host);
 
         /// <inheritdoc/>
         public bool TryGetResource(object key, out object value) => Loaded.TryGetResource(key, out value);
 
         /// <inheritdoc/>
-        void ISetStyleParent.NotifyResourcesChanged(ResourcesChangedEventArgs e)
+        void ISetResourceParent.ParentResourcesChanged(ResourcesChangedEventArgs e)
         {
-            (Loaded as ISetStyleParent)?.NotifyResourcesChanged(e);
+            (Loaded as ISetResourceParent)?.ParentResourcesChanged(e);
         }
 
         /// <inheritdoc/>
-        void ISetStyleParent.SetParent(IResourceNode parent)
+        void ISetResourceParent.SetParent(IResourceNode parent)
         {
             if (_parent != null && parent != null)
             {

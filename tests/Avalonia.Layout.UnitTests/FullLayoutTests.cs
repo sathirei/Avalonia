@@ -175,6 +175,7 @@ namespace Avalonia.Layout.UnitTests
                 x.CreateFormattedText(
                     It.IsAny<string>(),
                     It.IsAny<Typeface>(),
+                    It.IsAny<double>(),
                     It.IsAny<TextAlignment>(),
                     It.IsAny<TextWrapping>(),
                     It.IsAny<Size>(),
@@ -207,6 +208,8 @@ namespace Avalonia.Layout.UnitTests
                 .Bind<IRuntimePlatform>().ToConstant(new AppBuilder().RuntimePlatform)
                 .Bind<IPlatformRenderInterface>().ToConstant(renderInterface.Object)
                 .Bind<IStyler>().ToConstant(new Styler())
+                .Bind<IFontManagerImpl>().ToConstant(new MockFontManagerImpl())
+                .Bind<ITextShaperImpl>().ToConstant(new MockTextShaperImpl())
                 .Bind<IWindowingPlatform>().ToConstant(new Avalonia.Controls.UnitTests.WindowingPlatformMock(() => windowImpl.Object));
 
             var theme = new DefaultTheme();

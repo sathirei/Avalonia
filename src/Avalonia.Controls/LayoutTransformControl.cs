@@ -17,10 +17,10 @@ namespace Avalonia.Controls
     /// </summary>
     public class LayoutTransformControl : Decorator
     {
-        public static readonly AvaloniaProperty<Transform> LayoutTransformProperty =
+        public static readonly StyledProperty<Transform> LayoutTransformProperty =
             AvaloniaProperty.Register<LayoutTransformControl, Transform>(nameof(LayoutTransform));
 
-        public static readonly AvaloniaProperty<bool> UseRenderTransformProperty =
+        public static readonly StyledProperty<bool> UseRenderTransformProperty =
             AvaloniaProperty.Register<LayoutTransformControl, bool>(nameof(LayoutTransform));
 
         static LayoutTransformControl()
@@ -28,11 +28,13 @@ namespace Avalonia.Controls
             ClipToBoundsProperty.OverrideDefaultValue<LayoutTransformControl>(true);
 
             LayoutTransformProperty.Changed
-                .AddClassHandler<LayoutTransformControl>(x => x.OnLayoutTransformChanged);
+                .AddClassHandler<LayoutTransformControl>((x, e) => x.OnLayoutTransformChanged(e));
 
             ChildProperty.Changed
-                .AddClassHandler<LayoutTransformControl>(x => x.OnChildChanged);
-            UseRenderTransformProperty.Changed.AddClassHandler<LayoutTransformControl>(x => x.OnUseRenderTransformPropertyChanged);
+                .AddClassHandler<LayoutTransformControl>((x, e) => x.OnChildChanged(e));
+
+            UseRenderTransformProperty.Changed
+                .AddClassHandler<LayoutTransformControl>((x, e) => x.OnUseRenderTransformPropertyChanged(e));
         }
 
         /// <summary>

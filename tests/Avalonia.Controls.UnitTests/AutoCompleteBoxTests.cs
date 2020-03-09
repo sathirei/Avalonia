@@ -982,6 +982,9 @@ namespace Avalonia.Controls.UnitTests
                 AutoCompleteBox control = CreateControl();
                 control.Items = CreateSimpleStringArray();
                 TextBox textBox = GetTextBox(control);
+                var window = new Window {Content = control};
+                window.ApplyTemplate();
+                window.Presenter.ApplyTemplate();
                 Dispatcher.UIThread.RunJobs();
                 test.Invoke(control, textBox);
             }
@@ -1027,7 +1030,8 @@ namespace Avalonia.Controls.UnitTests
                 var popup =
                     new Popup
                     {
-                        Name = "PART_Popup"
+                        Name = "PART_Popup",
+                        PlacementTarget = control
                     }.RegisterInNameScope(scope);
 
                 var panel = new Panel();

@@ -5,45 +5,11 @@
 #include "window.h"
 #include "KeyTransform.h"
 #include "cursor.h"
+#include "menu.h"
 #include <OpenGL/gl.h>
+#include "rendertarget.h"
 
-class SoftwareDrawingOperation
-{
-public:
-    void* Data = 0;
-    AvnFramebuffer Desc;
-    void Alloc(NSView* view)
-    {
-        auto logicalSize = [view frame].size;
-        auto pixelSize = [view convertSizeToBacking:logicalSize];
-        int w = pixelSize.width;
-        int h = pixelSize.height;
-        int stride = w * 4;
-        Data = malloc(h * stride);
-        Desc = {
-            .Data = Data,
-            .Stride = stride,
-            .Width = w,
-            .Height = h,
-            .PixelFormat = kAvnRgba8888,
-            .Dpi = AvnVector { .X = w / logicalSize.width * 96, .Y = h / logicalSize.height * 96}
-        };
-    }
-    
-    void Dealloc()
-    {
-        if(Data != NULL)
-        {
-            free(Data);
-            Data = NULL;
-        }
-    }
-    
-    ~SoftwareDrawingOperation()
-    {
-        Dealloc();
-    }
-};
+
 
 class WindowBaseImpl : public virtual ComSingleObject<IAvnWindowBase, &IID_IAvnWindowBase>, public INSWindowHolder
 {
@@ -54,20 +20,24 @@ public:
     FORWARD_IUNKNOWN()
     virtual ~WindowBaseImpl()
     {
-        NSDebugLog(@"~WindowBaseImpl()");
         View = NULL;
         Window = NULL;
     }
     AvnView* View;
     AvnWindow* Window;
     ComPtr<IAvnWindowBaseEvents> BaseEvents;
-    SoftwareDrawingOperation CurrentSwDrawingOperation;
+    ComPtr<IAvnGlContext> _glContext;
+    NSObject<IRenderTarget>* renderTarget;
     AvnPoint lastPositionSet;
     NSString* _lastTitle;
+    IAvnAppMenu* _mainMenu;
     
-    WindowBaseImpl(IAvnWindowBaseEvents* events)
+    WindowBaseImpl(IAvnWindowBaseEvents* events, IAvnGlContext* gl)
     {
+        _mainMenu = nullptr;
         BaseEvents = events;
+        _glContext = gl;
+        renderTarget = [[IOSurfaceRenderTarget alloc] initWithOpenGlContext: gl];
         View = [[AvnView alloc] initWithParent:this];
 
         Window = [[AvnWindow alloc] initWithParent:this];
@@ -79,6 +49,54 @@ public:
         [Window setStyleMask:NSWindowStyleMaskBorderless];
         [Window setBackingType:NSBackingStoreBuffered];
         [Window setContentView: View];
+    }
+    
+    virtual HRESULT ObtainNSWindowHandle(void** ret) override
+    {
+        if (ret == nullptr)
+        {
+            return E_POINTER;
+        }
+        
+        *ret =  (__bridge void*)Window;
+        
+        return S_OK;
+    }
+    
+    virtual HRESULT ObtainNSWindowHandleRetained(void** ret) override
+    {
+        if (ret == nullptr)
+        {
+            return E_POINTER;
+        }
+        
+        *ret =  (__bridge_retained void*)Window;
+        
+        return S_OK;
+    }
+    
+    virtual HRESULT ObtainNSViewHandle(void** ret) override
+    {
+        if (ret == nullptr)
+        {
+            return E_POINTER;
+        }
+        
+        *ret =  (__bridge void*)View;
+        
+        return S_OK;
+    }
+    
+    virtual HRESULT ObtainNSViewHandleRetained(void** ret) override
+    {
+        if (ret == nullptr)
+        {
+            return E_POINTER;
+        }
+        
+        *ret =  (__bridge_retained void*)View;
+        
+        return S_OK;
     }
     
     virtual AvnWindow* GetNSWindow() override
@@ -94,6 +112,7 @@ public:
             UpdateStyle();
             
             [Window makeKeyAndOrderFront:Window];
+            [NSApp activateIgnoringOtherApps:YES];
             
             [Window setTitle:_lastTitle];
             [Window setTitleVisibility:NSWindowTitleVisible];
@@ -123,6 +142,7 @@ public:
             if(Window != nullptr)
             {
                 [Window makeKeyWindow];
+                [NSApp activateIgnoringOtherApps:YES];
             }
         }
         
@@ -143,7 +163,11 @@ public:
     {
         @autoreleasepool
         {
-            [Window close];
+            if (Window != nullptr)
+            {
+                [Window close];
+            }
+            
             return S_OK;
         }
     }
@@ -157,22 +181,6 @@ public:
             auto frame = [View frame];
             ret->Width = frame.size.width;
             ret->Height = frame.size.height;
-            return S_OK;
-        }
-    }
-    
-    virtual HRESULT GetMaxClientSize(AvnSize* ret) override
-    {
-        @autoreleasepool
-        {
-            if(ret == nullptr)
-                return E_POINTER;
-            
-            auto size = [NSScreen.screens objectAtIndex:0].frame.size;
-            
-            ret->Height = size.height;
-            ret->Width = size.width;
-            
             return S_OK;
         }
     }
@@ -226,20 +234,29 @@ public:
         }
     }
     
-    virtual bool TryLock() override
+    virtual HRESULT SetMainMenu(IAvnAppMenu* menu) override
     {
-        @autoreleasepool
-        {
-            return [View lockFocusIfCanDraw] == YES;
-        }
+        _mainMenu = menu;
+        
+        auto nativeMenu = dynamic_cast<AvnAppMenu*>(menu);
+        
+        auto nsmenu = nativeMenu->GetNative();
+        
+        [Window applyMenu:nsmenu];
+        
+        return S_OK;
     }
     
-    virtual void Unlock() override
+    virtual HRESULT ObtainMainMenu(IAvnAppMenu** ret) override
     {
-        @autoreleasepool
+        if(ret == nullptr)
         {
-            [View unlockFocus];
+            return E_POINTER;
         }
+        
+        *ret = _mainMenu;
+        
+        return S_OK;
     }
     
     virtual HRESULT BeginMoveDrag () override
@@ -336,16 +353,6 @@ public:
         return S_OK;
     }
     
-    virtual HRESULT GetSoftwareFramebuffer(AvnFramebuffer*ret) override
-    {
-        if(![[NSThread currentThread] isMainThread])
-            return E_FAIL;
-        if(CurrentSwDrawingOperation.Data == NULL)
-            CurrentSwDrawingOperation.Alloc(View);
-        *ret = CurrentSwDrawingOperation.Desc;
-        return S_OK;
-    }
-    
     virtual HRESULT SetCursor(IAvnCursor* cursor) override
     {
         @autoreleasepool
@@ -369,12 +376,9 @@ public:
 
     virtual void UpdateCursor()
     {
-        [View resetCursorRects];
         if (cursor != nil)
         {
-             auto rect = [Window frame];
-             [View addCursorRect:rect cursor:cursor];
-             [cursor set];
+            [cursor set];
         }
     }
     
@@ -382,8 +386,8 @@ public:
     {
         if(View == NULL)
             return E_FAIL;
-        *ppv = ::CreateGlRenderTarget(Window, View);
-        return S_OK;
+        *ppv = [renderTarget createSurfaceRenderTarget];
+        return *ppv == nil ? E_FAIL : S_OK;
     }
 
 protected:
@@ -416,15 +420,16 @@ private:
     INHERIT_INTERFACE_MAP(WindowBaseImpl)
     INTERFACE_MAP_ENTRY(IAvnWindow, IID_IAvnWindow)
     END_INTERFACE_MAP()
-    virtual ~WindowImpl(){
-        NSDebugLog(@"~WindowImpl");
+    virtual ~WindowImpl()
+    {
     }
     
     ComPtr<IAvnWindowEvents> WindowEvents;
-    WindowImpl(IAvnWindowEvents* events) : WindowBaseImpl(events)
+    WindowImpl(IAvnWindowEvents* events, IAvnGlContext* gl) : WindowBaseImpl(events, gl)
     {
         WindowEvents = events;
         [Window setCanBecomeKeyAndMain];
+        [Window disableCursorRects];
     }
     
     virtual HRESULT Show () override
@@ -657,20 +662,24 @@ NSArray* AllLoopModes = [NSArray arrayWithObjects: NSDefaultRunLoopMode, NSEvent
     AvnFramebuffer _swRenderedFrameBuffer;
     bool _queuedDisplayFromThread;
     NSTrackingArea* _area;
-    bool _isLeftPressed, _isMiddlePressed, _isRightPressed, _isMouseOver;
+    bool _isLeftPressed, _isMiddlePressed, _isRightPressed, _isXButton1Pressed, _isXButton2Pressed, _isMouseOver;
     NSEvent* _lastMouseDownEvent;
     bool _lastKeyHandled;
+    AvnPixelSize _lastPixelSize;
+    NSObject<IRenderTarget>* _renderTarget;
 }
-
-- (void)dealloc
-{
-    NSDebugLog(@"AvnView dealloc");
-}
-
 
 - (void)onClosed
 {
-    _parent = NULL;
+    @synchronized (self)
+    {
+        _parent = nullptr;
+    }
+}
+
+-(AvnPixelSize) getPixelSize
+{
+    return _lastPixelSize;
 }
 
 - (NSEvent*) lastMouseDownEvent
@@ -678,13 +687,41 @@ NSArray* AllLoopModes = [NSArray arrayWithObjects: NSDefaultRunLoopMode, NSEvent
     return _lastMouseDownEvent;
 }
 
+- (void) updateRenderTarget
+{
+    [_renderTarget resize:_lastPixelSize withScale: [[self window] backingScaleFactor]];
+    [self setNeedsDisplayInRect:[self frame]];
+}
+
 -(AvnView*)  initWithParent: (WindowBaseImpl*) parent
 {
     self = [super init];
-    [self setWantsBestResolutionOpenGLSurface:true];
+    _renderTarget = parent->renderTarget;
+    [self setWantsLayer:YES];
+    [self setLayerContentsRedrawPolicy: NSViewLayerContentsRedrawDuringViewResize];
+    
     _parent = parent;
     _area = nullptr;
+    _lastPixelSize.Height = 100;
+    _lastPixelSize.Width = 100;
+
     return self;
+}
+
+- (BOOL)isFlipped
+{
+    return YES;
+}
+
+- (BOOL)wantsUpdateLayer
+{
+    return YES;
+}
+
+- (void)setLayer:(CALayer *)layer
+{
+    [_renderTarget setNewLayer: layer];
+    [super setLayer: layer];
 }
 
 - (BOOL)isOpaque
@@ -716,7 +753,12 @@ NSArray* AllLoopModes = [NSArray arrayWithObjects: NSDefaultRunLoopMode, NSEvent
         [self removeTrackingArea:_area];
         _area = nullptr;
     }
-    
+
+    if (_parent == nullptr)
+    {
+        return;
+    }
+
     NSRect rect = NSZeroRect;
     rect.size = newSize;
     
@@ -725,81 +767,36 @@ NSArray* AllLoopModes = [NSArray arrayWithObjects: NSDefaultRunLoopMode, NSEvent
     [self addTrackingArea:_area];
     
     _parent->UpdateCursor();
-
+    
+    auto fsize = [self convertSizeToBacking: [self frame].size];
+    _lastPixelSize.Width = (int)fsize.width;
+    _lastPixelSize.Height = (int)fsize.height;
+    [self updateRenderTarget];
     _parent->BaseEvents->Resized(AvnSize{newSize.width, newSize.height});
 }
 
-- (void) drawFb: (AvnFramebuffer*) fb
+
+- (void)updateLayer
 {
-    auto colorSpace = CGColorSpaceCreateDeviceRGB();
-    auto dataProvider = CGDataProviderCreateWithData(NULL, fb->Data, fb->Height*fb->Stride, NULL);
-
+    if (_parent == nullptr)
+    {
+        return;
+    }
     
-    auto image = CGImageCreate(fb->Width, fb->Height, 8, 32, fb->Stride, colorSpace, kCGBitmapByteOrderDefault | kCGImageAlphaPremultipliedLast,
-                               dataProvider, nullptr, false, kCGRenderingIntentDefault);
-    
-    auto ctx = [NSGraphicsContext currentContext];
-    
-    [ctx saveGraphicsState];
-    auto cgc = [ctx CGContext];
-    
-    CGContextDrawImage(cgc, CGRect{0,0, fb->Width/(fb->Dpi.X/96), fb->Height/(fb->Dpi.Y/96)}, image);
-    CGImageRelease(image);
-    CGColorSpaceRelease(colorSpace);
-    CGDataProviderRelease(dataProvider);
-    
-    [ctx restoreGraphicsState];
-
+    _parent->BaseEvents->RunRenderPriorityJobs();
+    _parent->BaseEvents->Paint();
 }
 
 - (void)drawRect:(NSRect)dirtyRect
 {
-    _parent->BaseEvents->RunRenderPriorityJobs();
-    @synchronized (self) {
-        if(_swRenderedFrame != NULL)
-        {
-            [self drawFb: &_swRenderedFrameBuffer];
-            return;
-        }
-    }
-    
-    auto swOp = &_parent->CurrentSwDrawingOperation;
-    _parent->BaseEvents->Paint();
-    if(swOp->Data != NULL)
-        [self drawFb: &swOp->Desc];
-    
-    swOp->Dealloc();
     return;
-}
-
--(void) redrawSelf
-{
-    @autoreleasepool
-    {
-        @synchronized(self)
-        {
-            if(!_queuedDisplayFromThread)
-                return;
-            _queuedDisplayFromThread = false;
-        }
-        [self setNeedsDisplayInRect:[self frame]];
-        [self display];
-        
-    }
 }
 
 -(void) setSwRenderedFrame: (AvnFramebuffer*) fb dispose: (IUnknown*) dispose
 {
     @autoreleasepool {
-        @synchronized (self) {
-            _swRenderedFrame = dispose;
-            _swRenderedFrameBuffer = *fb;
-            if(!_queuedDisplayFromThread)
-            {
-                _queuedDisplayFromThread = true;
-                [self performSelector:@selector(redrawSelf) onThread:[NSThread mainThread] withObject:NULL waitUntilDone:false modes: AllLoopModes];
-            }
-        }
+        [_renderTarget setSwFrame:fb];
+        dispose->Release();
     }
 }
 
@@ -821,7 +818,12 @@ NSArray* AllLoopModes = [NSArray arrayWithObjects: NSDefaultRunLoopMode, NSEvent
 
 - (void) viewDidChangeBackingProperties
 {
+    auto fsize = [self convertSizeToBacking: [self frame].size];
+    _lastPixelSize.Width = (int)fsize.width;
+    _lastPixelSize.Height = (int)fsize.height;
+    [self updateRenderTarget];
     _parent->BaseEvents->ScalingChanged([_parent->Window backingScaleFactor]);
+    
     [super viewDidChangeBackingProperties];
 }
 
@@ -846,8 +848,15 @@ NSArray* AllLoopModes = [NSArray arrayWithObjects: NSDefaultRunLoopMode, NSEvent
     
     if(type == Wheel)
     {
-        delta.X = [event scrollingDeltaX] / 5;
-        delta.Y = [event scrollingDeltaY] / 5;
+        auto speed = 5;
+        
+        if([event hasPreciseScrollingDeltas])
+        {
+            speed = 50;
+        }
+        
+        delta.X = [event scrollingDeltaX] / speed;
+        delta.Y = [event scrollingDeltaY] / speed;
         
         if(delta.X == 0 && delta.Y == 0)
         {
@@ -877,9 +886,23 @@ NSArray* AllLoopModes = [NSArray arrayWithObjects: NSDefaultRunLoopMode, NSEvent
 
 - (void)otherMouseDown:(NSEvent *)event
 {
-    _isMiddlePressed = true;
     _lastMouseDownEvent = event;
-    [self mouseEvent:event withType:MiddleButtonDown];
+
+    switch(event.buttonNumber)
+    {
+        case 3:
+            _isMiddlePressed = true;
+            [self mouseEvent:event withType:MiddleButtonDown];
+            break;
+        case 4:
+            _isXButton1Pressed = true;
+            [self mouseEvent:event withType:XButton1Down];
+            break;
+        case 5:
+            _isXButton2Pressed = true;
+            [self mouseEvent:event withType:XButton2Down];
+            break;
+    }
 }
 
 - (void)rightMouseDown:(NSEvent *)event
@@ -897,8 +920,21 @@ NSArray* AllLoopModes = [NSArray arrayWithObjects: NSDefaultRunLoopMode, NSEvent
 
 - (void)otherMouseUp:(NSEvent *)event
 {
-    _isMiddlePressed = false;
-    [self mouseEvent:event withType:MiddleButtonUp];
+    switch(event.buttonNumber)
+    {
+        case 3:
+            _isMiddlePressed = false;
+            [self mouseEvent:event withType:MiddleButtonUp];
+            break;
+        case 4:
+            _isXButton1Pressed = false;
+            [self mouseEvent:event withType:XButton1Up];
+            break;
+        case 5:
+            _isXButton2Pressed = false;
+            [self mouseEvent:event withType:XButton2Up];
+            break;
+    }
 }
 
 - (void)rightMouseUp:(NSEvent *)event
@@ -997,6 +1033,10 @@ NSArray* AllLoopModes = [NSArray arrayWithObjects: NSDefaultRunLoopMode, NSEvent
         rv |= MiddleMouseButton;
     if (_isRightPressed)
         rv |= RightMouseButton;
+    if (_isXButton1Pressed)
+        rv |= XButton1MouseButton;
+    if (_isXButton2Pressed)
+        rv |= XButton2MouseButton;
     
     return (AvnInputModifiers)rv;
 }
@@ -1063,11 +1103,25 @@ NSArray* AllLoopModes = [NSArray arrayWithObjects: NSDefaultRunLoopMode, NSEvent
     ComPtr<WindowBaseImpl> _parent;
     bool _canBecomeKeyAndMain;
     bool _closed;
+    NSMenu* _menu;
+    bool _isAppMenuApplied;
+    double _lastScaling;
 }
 
-- (void)dealloc
+-(double) getScaling
 {
-    NSDebugLog(@"AvnWindow dealloc");
+    return _lastScaling;
+}
+
++(void)closeAll
+{
+    NSArray<NSWindow*>* windows = [NSArray arrayWithArray:[NSApp windows]];
+    auto numWindows = [windows count];
+    
+    for(int i = 0; i < numWindows; i++)
+    {
+        [[windows objectAtIndex:i] performClose:nil];
+    }
 }
 
 - (void)pollModalSession:(nonnull NSModalSession)session
@@ -1087,6 +1141,32 @@ NSArray* AllLoopModes = [NSArray arrayWithObjects: NSDefaultRunLoopMode, NSEvent
     }
 }
 
+-(void) applyMenu:(NSMenu *)menu
+{
+    if(menu == nullptr)
+    {
+        menu = [NSMenu new];
+    }
+    
+    _menu = menu;
+    
+    if ([self isKeyWindow])
+    {
+        auto appMenu = ::GetAppMenuItem();
+        
+        if(appMenu != nullptr)
+        {
+            [[appMenu menu] removeItem:appMenu];
+            
+            [_menu insertItem:appMenu atIndex:0];
+            
+            _isAppMenuApplied = true;
+        }
+        
+        [NSApp setMenu:menu];
+    }
+}
+
 -(void) setCanBecomeKeyAndMain
 {
     _canBecomeKeyAndMain = true;
@@ -1098,6 +1178,12 @@ NSArray* AllLoopModes = [NSArray arrayWithObjects: NSDefaultRunLoopMode, NSEvent
     [self setReleasedWhenClosed:false];
     _parent = parent;
     [self setDelegate:self];
+    _closed = false;
+    
+    _lastScaling = [self backingScaleFactor];
+    [self setOpaque:NO];
+    [self setBackgroundColor: [NSColor clearColor]];
+    [self invalidateShadow];
     return self;
 }
 
@@ -1113,6 +1199,11 @@ NSArray* AllLoopModes = [NSArray arrayWithObjects: NSDefaultRunLoopMode, NSEvent
     return true;
 }
 
+- (void)windowDidChangeBackingProperties:(NSNotification *)notification
+{
+    _lastScaling = [self backingScaleFactor];
+}
+
 - (void)windowWillClose:(NSNotification *)notification
 {
     _closed = true;
@@ -1123,9 +1214,6 @@ NSArray* AllLoopModes = [NSArray arrayWithObjects: NSDefaultRunLoopMode, NSEvent
         [self restoreParentWindow];
         parent->BaseEvents->Closed();
         [parent->View onClosed];
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [self setContentView: nil];
-        });
     }
 }
 
@@ -1179,6 +1267,24 @@ NSArray* AllLoopModes = [NSArray arrayWithObjects: NSDefaultRunLoopMode, NSEvent
 {
     if([self activateAppropriateChild: true])
     {
+        if(_menu == nullptr)
+        {
+            _menu = [NSMenu new];
+        }
+        
+        auto appMenu = ::GetAppMenuItem();
+        
+        if(appMenu != nullptr)
+        {
+            [[appMenu menu] removeItem:appMenu];
+            
+            [_menu insertItem:appMenu atIndex:0];
+            
+            _isAppMenuApplied = true;
+        }
+        
+        [NSApp setMenu:_menu];
+        
         _parent->BaseEvents->Activated();
         [super becomeKeyWindow];
     }
@@ -1223,6 +1329,28 @@ NSArray* AllLoopModes = [NSArray arrayWithObjects: NSDefaultRunLoopMode, NSEvent
 {
     if(_parent)
         _parent->BaseEvents->Deactivated();
+    
+    auto appMenuItem = ::GetAppMenuItem();
+    
+    if(appMenuItem != nullptr)
+    {
+        auto appMenu = ::GetAppMenu();
+        
+        auto nativeAppMenu = dynamic_cast<AvnAppMenu*>(appMenu);
+        
+        [[appMenuItem menu] removeItem:appMenuItem];
+        
+        [nativeAppMenu->GetNative() addItem:appMenuItem];
+        
+        [NSApp setMenu:nativeAppMenu->GetNative()];
+    }
+    else
+    {
+        [NSApp setMenu:nullptr];
+    }
+    
+    // remove window menu items from appmenu?
+    
     [super resignKeyWindow];
 }
 
@@ -1232,18 +1360,6 @@ NSArray* AllLoopModes = [NSArray arrayWithObjects: NSDefaultRunLoopMode, NSEvent
     _parent->GetPosition(&position);
     _parent->BaseEvents->PositionChanged(position);
 }
-
-// TODO this breaks resizing.
-/*- (void)windowDidResize:(NSNotification *)notification
-{
-    
-    auto parent = dynamic_cast<IWindowStateChanged*>(_parent.operator->());
-    
-    if(parent != nullptr)
-    {
-        parent->WindowStateChanged();
-    }
-}*/
 @end
 
 class PopupImpl : public virtual WindowBaseImpl, public IAvnPopup
@@ -1255,7 +1371,7 @@ private:
     END_INTERFACE_MAP()
     virtual ~PopupImpl(){}
     ComPtr<IAvnWindowEvents> WindowEvents;
-    PopupImpl(IAvnWindowEvents* events) : WindowBaseImpl(events)
+    PopupImpl(IAvnWindowEvents* events, IAvnGlContext* gl) : WindowBaseImpl(events, gl)
     {
         WindowEvents = events;
         [Window setLevel:NSPopUpMenuWindowLevel];
@@ -1279,20 +1395,20 @@ protected:
     }
 };
 
-extern IAvnPopup* CreateAvnPopup(IAvnWindowEvents*events)
+extern IAvnPopup* CreateAvnPopup(IAvnWindowEvents*events, IAvnGlContext* gl)
 {
     @autoreleasepool
     {
-        IAvnPopup* ptr = dynamic_cast<IAvnPopup*>(new PopupImpl(events));
+        IAvnPopup* ptr = dynamic_cast<IAvnPopup*>(new PopupImpl(events, gl));
         return ptr;
     }
 }
 
-extern IAvnWindow* CreateAvnWindow(IAvnWindowEvents*events)
+extern IAvnWindow* CreateAvnWindow(IAvnWindowEvents*events, IAvnGlContext* gl)
 {
     @autoreleasepool
     {
-        IAvnWindow* ptr = (IAvnWindow*)new WindowImpl(events);
+        IAvnWindow* ptr = (IAvnWindow*)new WindowImpl(events, gl);
         return ptr;
     }
 }

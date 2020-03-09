@@ -4,6 +4,7 @@
     <Setter Property="BorderBrush" Value="{DynamicResource ThemeBorderMidBrush}"/>
     <Setter Property="BorderThickness" Value="{DynamicResource ThemeBorderThickness}"/>
     <Setter Property="Padding" Value="4"/>
+    <Setter Property="MinHeight" Value="20"/>
     <Setter Property="Template">
       <ControlTemplate>
         <Border Name="border"
@@ -36,20 +37,17 @@
                    MinWidth="{Binding Bounds.Width, RelativeSource={RelativeSource TemplatedParent}}"
                    MaxHeight="{TemplateBinding MaxDropDownHeight}"
                    PlacementTarget="{TemplateBinding}"
-                   ObeyScreenEdges="True"
                    StaysOpen="False">
               <Border BorderBrush="{DynamicResource ThemeBorderMidBrush}"
                       BorderThickness="1">
-                  <AdornerDecorator Margin="-1 -1 0 0">
-                      <ScrollViewer>
-                          <ItemsPresenter Name="PART_ItemsPresenter"
-                                          Items="{TemplateBinding Items}"
-                                          ItemsPanel="{TemplateBinding ItemsPanel}"
-                                          ItemTemplate="{TemplateBinding ItemTemplate}"
-                                          VirtualizationMode="{TemplateBinding VirtualizationMode}"
-                                  />
-                      </ScrollViewer>
-                  </AdornerDecorator>
+                <ScrollViewer>
+                  <ItemsPresenter Name="PART_ItemsPresenter"
+                                  Items="{TemplateBinding Items}"
+                                  ItemsPanel="{TemplateBinding ItemsPanel}"
+                                  ItemTemplate="{TemplateBinding ItemTemplate}"
+                                  VirtualizationMode="{TemplateBinding VirtualizationMode}"
+                              />
+                </ScrollViewer>
               </Border>
             </Popup>
           </Grid>
@@ -59,5 +57,8 @@
   </Style>
   <Style Selector="ComboBox:pointerover /template/ Border#border">
     <Setter Property="BorderBrush" Value="{DynamicResource ThemeBorderHighBrush}"/>
+  </Style>
+  <Style Selector="ComboBox:disabled /template/ Border#border">
+    <Setter Property="Opacity" Value="{DynamicResource ThemeDisabledOpacity}" />
   </Style>
 </Styles>
